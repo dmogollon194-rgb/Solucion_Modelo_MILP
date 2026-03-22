@@ -814,7 +814,80 @@ def build_constraint_family_text(family: Dict[str, Any]) -> str:
     if len(forall) > 0:
         txt += "   ∀ " + ", ".join(forall)
     return txt
+def format_number_latex(val: float) -> str:
+    val = float(val)
+    if val.is_integer():
+        return str(int(val))
+    return f"{val:.2f}"
 
+
+def factor_to_latex(factor: Dict[str, Any]) -> str:
+    if factor["type"] == "object":
+        name = factor["name"]
+        indices = factor["indices"]
+
+        if len(indices) == 0:
+            return name
+
+        idx_str = ",".join(indices)
+        return rf"{name}_{{{idx_str}}}"
+
+    elif factor["type"] == "constant":
+        return format_number_latex(factor["value"])
+
+    return "?"
+
+
+def build_term_latex(term: Dict[str, Any]) -> str:
+    sign = term.get("sign", "+")
+    factors = term.get("factors", [])
+
+    if len(factors) == 0:
+        body = "0"
+    else:
+        body = r" \cdot ".join(factor_to_latex(f) for f in factors)
+
+    sum_over = term.get("sum_over", [])
+    if len(sum_over) > 0:
+        sums = " ".join([rf"\sum_{{{idx}}}" for idx in sum_over])
+        body = f"{sums} \\left({body}\\right)"
+
+    if sign == "-":
+        return f"- {body}"
+    return f"+ {body}"
+
+
+def build_expression_latex(terms: List[Dict[str, Any]]) -> str:
+    if len(terms) == 0:
+        return "0"
+
+    parts = [build_term_latex(t) for t in terms]
+    expr = " ".join(parts).strip()
+
+    if expr.startswith("+ "):
+        expr = expr[2:]
+
+    return expr
+
+
+def build_constraint_family_latex(family: Dict[str, Any]) -> str:
+    lhs = build_expression_latex(family.get("lhs_terms", []))
+    rhs = build_expression_latex(family.get("rhs_terms", []))
+    sense = family.get("sense", "<=")
+    forall = family.get("forall", [])
+
+    sense_map = {
+        "<=": r"\leq",
+        ">=": r"\geq",
+        "=": "="
+    }
+
+    txt = f"{lhs} {sense_map[sense]} {rhs}"
+
+    if len(forall) > 0:
+        txt += r"\quad \forall " + ", ".join(forall)
+
+    return txt
 # ============================================================
 # BARRA LATERAL / NAVEGACIÓN
 # ============================================================
