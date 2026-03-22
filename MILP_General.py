@@ -218,7 +218,162 @@ def reset_variables_if_invalid(index_specs: Dict[str, Dict[str, Any]]) -> None:
         if all(idx in valid_index_names for idx in idxs):
             cleaned[vname] = vspec
     st.session_state["model_spec"]["variables"] = cleaned
+# ============================================================
+# UTILIDADES PARA DEFINICIÓN DEL MODELO
+# ============================================================
 
+def object_catalog(model_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Devuelve catálogo de objetos usables en expresiones:
+    parámetros y variables.
+    """
+    items = []
+
+    for pname, pspec in model_spec["parameters"].items():
+        items.append({
+            "kind": "parameter",
+            "name": pname,
+            "indices": pspec["indices"],
+            "label": pretty_param_signature(pname, pspec["indices"])
+        })
+
+    for vname, vspec in model_spec["variables"].items():
+        items.append({
+            "kind": "variable",
+            "name": vname,
+            "indices": vspec["indices"],
+            "label": pretty_var_signature(vname, vspec["indices"])
+        })
+
+    return items
+
+
+def object_lookup(model_spec: Dict[str, Any], kind: str, name: str) -> Dict[str, Any]:
+    if kind == "parameter":
+        pspec = model_spec["parameters"][name]
+        return {
+            "kind": "parameter",
+            "name": name,
+            "indices": pspec["indices"],
+            "label": pretty_param_signature(name, pspec["indices"])
+        }
+    elif kind == "variable":
+        vspec = model_spec["variables"][name]
+        return {
+            "kind": "variable",
+            "name": name,
+            "indices": vspec["indices"],
+            "label": pretty_var_signature(name, vspec["indices"])
+        }
+    else:
+        raise ValueError(f"Tipo de objeto no reconocido: {kind}")
+
+
+def factor_to_text(factor: Dict[str, Any]) -> str:
+    if factor["type"] == "object":
+        return factor["label"]
+    elif factor["type"] == "constant":
+        return str(factor["value"])
+    else:
+        return "<?>"
+
+def ordered_unique(seq: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for x in seq:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def term_used_indices(term: Dict[str, Any]) -> List[str]:
+    idxs = []
+    for fac in term["factors"]:
+        if fac["type"] == "object":
+            idxs.extend(fac["indices"])
+    return ordered_unique(idxs)
+
+
+def term_free_indices(term: Dict[str, Any]) -> List[str]:
+    used = term_used_indices(term)
+    summed = term.get("sum_over", [])
+    return [idx for idx in used if idx not in summed]
+
+
+def build_term_text(term: Dict[str, Any]) -> str:
+    sign = term.get("sign", "+")
+    factors_txt = " * ".join(factor_to_text(f) for f in term["factors"]) if term["factors"] else "0"
+    txt = factors_txt
+
+    sum_over = term.get("sum_over", [])
+    if len(sum_over) > 0:
+        sums = " ".join([f"Σ_{{{idx}}}" for idx in sum_over])
+        txt = f"{sums} ({txt})"
+
+    if sign == "-":
+        txt = f"- {txt}"
+    else:
+        txt = f"+ {txt}"
+
+    return txt
+
+
+def build_expression_text(terms: List[Dict[str, Any]]) -> str:
+    if len(terms) == 0:
+        return "0"
+    parts = [build_term_text(t) for t in terms]
+    expr = " ".join(parts).strip()
+    if expr.startswith("+ "):
+        expr = expr[2:]
+    return expr
+
+
+def validate_objective_terms(terms: List[Dict[str, Any]]) -> List[str]:
+    errors = []
+    for pos, term in enumerate(terms, start=1):
+        free_idxs = term_free_indices(term)
+        if len(free_idxs) > 0:
+            errors.append(
+                f"En el término {pos} de la función objetivo quedaron índices libres: {', '.join(free_idxs)}. "
+                f"Todos los índices usados deben estar cubiertos por sumatorias."
+            )
+    return errors
+
+
+def validate_constraint_family(family: Dict[str, Any]) -> List[str]:
+    errors = []
+
+    lhs_terms = family.get("lhs_terms", [])
+    rhs_terms = family.get("rhs_terms", [])
+    forall = family.get("forall", [])
+
+    lhs_free = ordered_unique([idx for t in lhs_terms for idx in term_free_indices(t)])
+    rhs_free = ordered_unique([idx for t in rhs_terms for idx in term_free_indices(t)])
+
+    if lhs_free != rhs_free:
+        errors.append(
+            f"Los índices libres del lado izquierdo ({lhs_free}) no coinciden con los del lado derecho ({rhs_free})."
+        )
+
+    if lhs_free != forall:
+        errors.append(
+            f"Los índices libres de la restricción ({lhs_free}) no coinciden con el 'para todo' definido ({forall})."
+        )
+
+    return errors
+
+
+def build_constraint_family_text(family: Dict[str, Any]) -> str:
+    lhs = build_expression_text(family.get("lhs_terms", []))
+    rhs = build_expression_text(family.get("rhs_terms", []))
+    sense = family.get("sense", "<=")
+    forall = family.get("forall", [])
+
+    txt = f"{lhs} {sense} {rhs}"
+    if len(forall) > 0:
+        txt += "   ∀ " + ", ".join(forall)
+    return txt
 
 # ============================================================
 # BARRA LATERAL / NAVEGACIÓN
