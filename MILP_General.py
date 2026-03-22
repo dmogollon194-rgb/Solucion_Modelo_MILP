@@ -1752,7 +1752,8 @@ elif section == "Definición del modelo":
                 }
                 lhs_terms.append(term_record)
 
-                st.write(f"Vista previa LHS término {t+1}: `{build_term_text(term_record)}`")
+                st.write(f"Vista previa LHS término {t+1}:")
+                st.latex(build_term_latex(term_record))
 
             # -----------------------
             # LADO DERECHO
@@ -1876,7 +1877,8 @@ elif section == "Definición del modelo":
                 }
                 rhs_terms.append(term_record)
 
-                st.write(f"Vista previa RHS término {t+1}: `{build_term_text(term_record)}`")
+                st.write(f"Vista previa RHS término {t+1}:")
+                st.latex(build_term_latex(term_record))
 
             family_record = {
                 "name": family_name,
@@ -1889,7 +1891,7 @@ elif section == "Definición del modelo":
             family_errors = validate_constraint_family(family_record)
 
             st.markdown(f"### Vista previa de la familia {family_name}")
-            st.code(build_constraint_family_text(family_record), language="text")
+            st.latex(build_constraint_family_latex(family_record))
 
             if len(family_errors) > 0:
                 for err in family_errors:
@@ -1908,14 +1910,14 @@ elif section == "Definición del modelo":
         st.subheader("4. Resumen de la definición del modelo")
 
         st.write("**Función objetivo:**")
-        st.code(f"{sense_symbol}  {obj_text}", language="text")
+        st.latex(rf"{sense_symbol}\ Z = {obj_latex}")
 
         st.write("**Familias de restricciones:**")
         if len(new_constraint_families) == 0:
             st.info("No hay familias de restricciones definidas.")
         else:
             for fam in new_constraint_families:
-                st.code(build_constraint_family_text(fam), language="text")
+                st.latex(build_constraint_family_latex(fam))
 
 # ============================================================
 # SECCIÓN 3: SALIDAS DEL MODELO
