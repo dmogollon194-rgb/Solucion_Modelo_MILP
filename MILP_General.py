@@ -416,7 +416,7 @@ def build_term_latex(term: Dict[str, Any]) -> str:
     sum_over = term.get("sum_over", [])
     if len(sum_over) > 0:
         sums = " ".join([rf"\sum_{{{idx}}}" for idx in sum_over])
-        body = f"{sums}\left({body}\right)"
+        body = f"{sums}\\left({body}\\right)"
 
     if sign == "-":
         return f"- {body}"
