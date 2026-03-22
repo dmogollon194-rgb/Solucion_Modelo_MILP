@@ -348,15 +348,50 @@ def validate_constraint_family(family: Dict[str, Any]) -> List[str]:
     lhs_free = ordered_unique([idx for t in lhs_terms for idx in term_free_indices(t)])
     rhs_free = ordered_unique([idx for t in rhs_terms for idx in term_free_indices(t)])
 
-    if lhs_free != rhs_free:
-        errors.append(
-            f"Los índices libres del lado izquierdo ({lhs_free}) no coinciden con los del lado derecho ({rhs_free})."
-        )
+    lhs_is_constant = (len(lhs_free) == 0)
+    rhs_is_constant = (len(rhs_free) == 0)
 
-    if lhs_free != forall:
-        errors.append(
-            f"Los índices libres de la restricción ({lhs_free}) no coinciden con el 'para todo' definido ({forall})."
-        )
+    # --------------------------------------------------------
+    # Caso 1: ambos lados tienen índices libres
+    # --------------------------------------------------------
+    if not lhs_is_constant and not rhs_is_constant:
+        if lhs_free != rhs_free:
+            errors.append(
+                f"Los índices libres del lado izquierdo ({lhs_free}) no coinciden con los del lado derecho ({rhs_free})."
+            )
+        if lhs_free != forall:
+            errors.append(
+                f"Los índices libres de la restricción ({lhs_free}) no coinciden con el 'para todo' definido ({forall})."
+            )
+
+    # --------------------------------------------------------
+    # Caso 2: LHS constante, RHS indexado
+    # --------------------------------------------------------
+    elif lhs_is_constant and not rhs_is_constant:
+        if rhs_free != forall:
+            errors.append(
+                f"El lado izquierdo es constante, por lo que los índices libres del lado derecho ({rhs_free}) "
+                f"deben coincidir con el 'para todo' ({forall})."
+            )
+
+    # --------------------------------------------------------
+    # Caso 3: RHS constante, LHS indexado
+    # --------------------------------------------------------
+    elif not lhs_is_constant and rhs_is_constant:
+        if lhs_free != forall:
+            errors.append(
+                f"El lado derecho es constante, por lo que los índices libres del lado izquierdo ({lhs_free}) "
+                f"deben coincidir con el 'para todo' ({forall})."
+            )
+
+    # --------------------------------------------------------
+    # Caso 4: ambos lados constantes
+    # --------------------------------------------------------
+    else:
+        if len(forall) > 0:
+            errors.append(
+                f"Ambos lados son constantes, así que no debería existir 'para todo' ({forall})."
+            )
 
     return errors
 
