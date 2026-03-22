@@ -43,7 +43,7 @@ init_session_state()
 
 
 # ============================================================
-# UTILIDADES
+# UTILIDADES PARA DEFINICIÓN DEL MODELO
 # ============================================================
 
 def is_valid_symbol(name: str) -> bool:
@@ -218,9 +218,6 @@ def reset_variables_if_invalid(index_specs: Dict[str, Dict[str, Any]]) -> None:
         if all(idx in valid_index_names for idx in idxs):
             cleaned[vname] = vspec
     st.session_state["model_spec"]["variables"] = cleaned
-# ============================================================
-# UTILIDADES PARA DEFINICIÓN DEL MODELO
-# ============================================================
 
 def object_catalog(model_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
