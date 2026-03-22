@@ -780,44 +780,547 @@ elif section == "Definición del modelo":
 
     st.header("Definición del modelo")
 
-    st.info(
-        "Esta sección queda preparada para la siguiente fase. "
-        "Aquí construiremos la función objetivo y las familias de restricciones."
-    )
-
     spec = st.session_state["model_spec"]
+    index_specs = spec["indices"]
+    param_specs = spec["parameters"]
+    var_specs = spec["variables"]
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Índices definidos", len(spec["indices"]))
-    with col2:
-        st.metric("Parámetros definidos", len(spec["parameters"]))
-    with col3:
-        st.metric("Variables definidas", len(spec["variables"]))
-
-    st.markdown("---")
-    st.subheader("Vista preliminar de la estructura disponible")
-
-    if len(spec["indices"]) == 0:
-        st.warning("Aún no hay índices definidos.")
+    if len(index_specs) == 0:
+        st.warning("Primero debes definir al menos un índice.")
+    elif len(var_specs) == 0:
+        st.warning("Primero debes definir al menos una variable.")
     else:
-        st.write("**Índices disponibles:**")
-        st.write(", ".join(spec["indices"].keys()))
+        # ====================================================
+        # 2.1 TIPO DE PROBLEMA
+        # ====================================================
+        st.subheader("1. Tipo de problema")
 
-    if len(spec["parameters"]) == 0:
-        st.warning("Aún no hay parámetros definidos.")
-    else:
-        st.write("**Parámetros disponibles:**")
-        for pname, pspec in spec["parameters"].items():
-            st.write(f"- {pretty_param_signature(pname, pspec['indices'])}")
+        current_obj = spec.get("objective", None)
+        default_sense = "minimize"
+        if current_obj is not None:
+            default_sense = current_obj.get("sense", "minimize")
 
-    if len(spec["variables"]) == 0:
-        st.warning("Aún no hay variables definidas.")
-    else:
-        st.write("**Variables disponibles:**")
-        for vname, vspec in spec["variables"].items():
-            st.write(f"- {pretty_var_signature(vname, vspec['indices'])}")
+        sense_options = ["minimize", "maximize"]
+        sense = st.selectbox(
+            "Sentido de la función objetivo",
+            options=sense_options,
+            index=sense_options.index(default_sense),
+            format_func=lambda x: "Minimizar" if x == "minimize" else "Maximizar",
+            key="objective_sense"
+        )
 
+        # ====================================================
+        # 2.2 FUNCIÓN OBJETIVO
+        # ====================================================
+        st.markdown("---")
+        st.subheader("2. Función objetivo")
+
+        st.write(
+            "Construye la función objetivo como suma de términos. "
+            "Cada término puede tener constantes, parámetros y variables, "
+            "y puede incluir sumatorias."
+        )
+
+        obj_catalog = object_catalog(spec)
+        obj_catalog_labels = [obj["label"] for obj in obj_catalog]
+        obj_label_to_item = {obj["label"]: obj for obj in obj_catalog}
+
+        old_obj_terms = []
+        if current_obj is not None:
+            old_obj_terms = current_obj.get("terms", [])
+
+        num_obj_terms = st.number_input(
+            "Número de términos en la función objetivo",
+            min_value=1,
+            max_value=20,
+            value=max(1, len(old_obj_terms) if len(old_obj_terms) > 0 else 1),
+            step=1,
+            key="num_obj_terms"
+        )
+
+        objective_terms = []
+
+        for t in range(int(num_obj_terms)):
+            st.markdown(f"#### Término FO {t+1}")
+
+            old_term = old_obj_terms[t] if t < len(old_obj_terms) else None
+
+            c1, c2, c3 = st.columns([1, 2, 2])
+
+            with c1:
+                sign = st.selectbox(
+                    f"Signo término {t+1}",
+                    options=["+", "-"],
+                    index=0 if old_term is None else (0 if old_term.get("sign", "+") == "+" else 1),
+                    key=f"obj_term_sign_{t}"
+                )
+
+            with c2:
+                num_factors = st.number_input(
+                    f"Número de factores del término {t+1}",
+                    min_value=1,
+                    max_value=4,
+                    value=2 if old_term is None else max(1, len(old_term.get("factors", []))),
+                    step=1,
+                    key=f"obj_num_factors_{t}"
+                )
+
+            with c3:
+                default_sum_over = [] if old_term is None else old_term.get("sum_over", [])
+                sum_over = st.multiselect(
+                    f"Sumar sobre índices en término {t+1}",
+                    options=list(index_specs.keys()),
+                    default=default_sum_over,
+                    key=f"obj_sum_over_{t}"
+                )
+
+            factors = []
+
+            old_factors = [] if old_term is None else old_term.get("factors", [])
+
+            for f in range(int(num_factors)):
+                st.markdown(f"**Factor {f+1} del término {t+1}**")
+
+                fc1, fc2, fc3 = st.columns([1.5, 2.5, 2])
+
+                old_factor = old_factors[f] if f < len(old_factors) else None
+                default_factor_type = "object" if old_factor is None else old_factor.get("type", "object")
+
+                with fc1:
+                    factor_type = st.selectbox(
+                        f"Tipo factor {f+1} término {t+1}",
+                        options=["object", "constant"],
+                        index=0 if default_factor_type == "object" else 1,
+                        format_func=lambda x: "Parámetro/Variable" if x == "object" else "Constante",
+                        key=f"obj_factor_type_{t}_{f}"
+                    )
+
+                if factor_type == "object":
+                    default_label = obj_catalog_labels[0] if len(obj_catalog_labels) > 0 else None
+                    if old_factor is not None and old_factor.get("type") == "object":
+                        default_label = old_factor.get("label", default_label)
+
+                    if len(obj_catalog_labels) == 0:
+                        st.error("No hay parámetros ni variables disponibles para usar en la FO.")
+                    else:
+                        with fc2:
+                            chosen_label = st.selectbox(
+                                f"Objeto factor {f+1} término {t+1}",
+                                options=obj_catalog_labels,
+                                index=obj_catalog_labels.index(default_label) if default_label in obj_catalog_labels else 0,
+                                key=f"obj_factor_object_{t}_{f}"
+                            )
+
+                        item = obj_label_to_item[chosen_label]
+                        factors.append({
+                            "type": "object",
+                            "kind": item["kind"],
+                            "name": item["name"],
+                            "indices": item["indices"],
+                            "label": item["label"]
+                        })
+
+                        with fc3:
+                            st.write(f"Índices: {', '.join(item['indices']) if len(item['indices']) > 0 else 'ninguno'}")
+
+                else:
+                    default_value = 1.0
+                    if old_factor is not None and old_factor.get("type") == "constant":
+                        default_value = float(old_factor.get("value", 1.0))
+
+                    with fc2:
+                        const_val = st.number_input(
+                            f"Valor constante factor {f+1} término {t+1}",
+                            value=default_value,
+                            key=f"obj_factor_const_{t}_{f}"
+                        )
+
+                    factors.append({
+                        "type": "constant",
+                        "value": float(const_val)
+                    })
+
+            term_record = {
+                "sign": sign,
+                "factors": factors,
+                "sum_over": sum_over
+            }
+            objective_terms.append(term_record)
+
+            term_text = build_term_text(term_record)
+            free_idxs = term_free_indices(term_record)
+
+            st.write(f"**Vista previa del término:** `{term_text}`")
+            if len(free_idxs) > 0:
+                st.warning(f"Índices libres en este término: {', '.join(free_idxs)}")
+            else:
+                st.success("Este término no deja índices libres.")
+
+        objective_record = {
+            "sense": sense,
+            "terms": objective_terms
+        }
+
+        obj_errors = validate_objective_terms(objective_terms)
+
+        st.markdown("### Vista previa de la función objetivo")
+        sense_symbol = "min" if sense == "minimize" else "max"
+        obj_text = build_expression_text(objective_terms)
+        st.code(f"{sense_symbol}  {obj_text}", language="text")
+
+        if len(obj_errors) > 0:
+            for err in obj_errors:
+                st.error(err)
+        else:
+            st.success("La función objetivo está estructuralmente consistente.")
+
+        spec["objective"] = objective_record
+
+        # ====================================================
+        # 2.3 FAMILIAS DE RESTRICCIONES
+        # ====================================================
+        st.markdown("---")
+        st.subheader("3. Familias de restricciones")
+
+        st.write(
+            "Cada familia se construye con un lado izquierdo, un sentido, "
+            "un lado derecho y un conjunto de índices 'para todo'."
+        )
+
+        old_constraints = spec.get("constraints", [])
+
+        num_families = st.number_input(
+            "Número de familias de restricciones",
+            min_value=0,
+            max_value=30,
+            value=len(old_constraints) if len(old_constraints) > 0 else 1,
+            step=1,
+            key="num_constraint_families"
+        )
+
+        new_constraint_families = []
+
+        expr_catalog = object_catalog(spec)
+        expr_catalog_labels = [obj["label"] for obj in expr_catalog]
+        expr_label_to_item = {obj["label"]: obj for obj in expr_catalog}
+
+        for r in range(int(num_families)):
+            st.markdown(f"## Familia de restricción {r+1}")
+
+            old_family = old_constraints[r] if r < len(old_constraints) else None
+            old_forall = [] if old_family is None else old_family.get("forall", [])
+            old_sense = "<=" if old_family is None else old_family.get("sense", "<=")
+
+            fc1, fc2 = st.columns([2, 2])
+
+            with fc1:
+                family_name = st.text_input(
+                    f"Nombre de la familia {r+1}",
+                    value=f"R{r+1}" if old_family is None else old_family.get("name", f"R{r+1}"),
+                    key=f"constraint_family_name_{r}"
+                )
+
+            with fc2:
+                forall = st.multiselect(
+                    f"Para todo en familia {r+1}",
+                    options=list(index_specs.keys()),
+                    default=old_forall,
+                    key=f"constraint_family_forall_{r}"
+                )
+
+            sense = st.selectbox(
+                f"Sentido de la familia {r+1}",
+                options=["<=", ">=", "="],
+                index=["<=", ">=", "="].index(old_sense),
+                key=f"constraint_family_sense_{r}"
+            )
+
+            # -----------------------
+            # LADO IZQUIERDO
+            # -----------------------
+            st.markdown(f"### Lado izquierdo de {family_name}")
+
+            old_lhs = [] if old_family is None else old_family.get("lhs_terms", [])
+
+            lhs_num_terms = st.number_input(
+                f"Número de términos LHS en {family_name}",
+                min_value=1,
+                max_value=20,
+                value=max(1, len(old_lhs) if len(old_lhs) > 0 else 1),
+                step=1,
+                key=f"lhs_num_terms_{r}"
+            )
+
+            lhs_terms = []
+
+            for t in range(int(lhs_num_terms)):
+                st.markdown(f"**Término LHS {t+1}**")
+
+                old_term = old_lhs[t] if t < len(old_lhs) else None
+
+                c1, c2, c3 = st.columns([1, 2, 2])
+
+                with c1:
+                    sign = st.selectbox(
+                        f"Signo LHS término {t+1} en {family_name}",
+                        options=["+", "-"],
+                        index=0 if old_term is None else (0 if old_term.get("sign", "+") == "+" else 1),
+                        key=f"lhs_sign_{r}_{t}"
+                    )
+
+                with c2:
+                    num_factors = st.number_input(
+                        f"Número de factores LHS término {t+1} en {family_name}",
+                        min_value=1,
+                        max_value=4,
+                        value=2 if old_term is None else max(1, len(old_term.get("factors", []))),
+                        step=1,
+                        key=f"lhs_num_factors_{r}_{t}"
+                    )
+
+                with c3:
+                    default_sum_over = [] if old_term is None else old_term.get("sum_over", [])
+                    sum_over = st.multiselect(
+                        f"Sumar sobre índices LHS término {t+1} en {family_name}",
+                        options=list(index_specs.keys()),
+                        default=default_sum_over,
+                        key=f"lhs_sum_over_{r}_{t}"
+                    )
+
+                factors = []
+                old_factors = [] if old_term is None else old_term.get("factors", [])
+
+                for f in range(int(num_factors)):
+                    old_factor = old_factors[f] if f < len(old_factors) else None
+                    default_factor_type = "object" if old_factor is None else old_factor.get("type", "object")
+
+                    cfa, cfb, cfc = st.columns([1.5, 2.5, 2])
+
+                    with cfa:
+                        factor_type = st.selectbox(
+                            f"Tipo factor LHS {f+1} término {t+1} en {family_name}",
+                            options=["object", "constant"],
+                            index=0 if default_factor_type == "object" else 1,
+                            format_func=lambda x: "Parámetro/Variable" if x == "object" else "Constante",
+                            key=f"lhs_factor_type_{r}_{t}_{f}"
+                        )
+
+                    if factor_type == "object":
+                        default_label = expr_catalog_labels[0] if len(expr_catalog_labels) > 0 else None
+                        if old_factor is not None and old_factor.get("type") == "object":
+                            default_label = old_factor.get("label", default_label)
+
+                        if len(expr_catalog_labels) == 0:
+                            st.error("No hay objetos disponibles.")
+                        else:
+                            with cfb:
+                                chosen_label = st.selectbox(
+                                    f"Objeto LHS factor {f+1} término {t+1} en {family_name}",
+                                    options=expr_catalog_labels,
+                                    index=expr_catalog_labels.index(default_label) if default_label in expr_catalog_labels else 0,
+                                    key=f"lhs_factor_object_{r}_{t}_{f}"
+                                )
+
+                            item = expr_label_to_item[chosen_label]
+                            factors.append({
+                                "type": "object",
+                                "kind": item["kind"],
+                                "name": item["name"],
+                                "indices": item["indices"],
+                                "label": item["label"]
+                            })
+
+                            with cfc:
+                                st.write(f"Índices: {', '.join(item['indices']) if len(item['indices']) > 0 else 'ninguno'}")
+
+                    else:
+                        default_value = 1.0
+                        if old_factor is not None and old_factor.get("type") == "constant":
+                            default_value = float(old_factor.get("value", 1.0))
+
+                        with cfb:
+                            const_val = st.number_input(
+                                f"Valor constante LHS factor {f+1} término {t+1} en {family_name}",
+                                value=default_value,
+                                key=f"lhs_factor_const_{r}_{t}_{f}"
+                            )
+
+                        factors.append({
+                            "type": "constant",
+                            "value": float(const_val)
+                        })
+
+                term_record = {
+                    "sign": sign,
+                    "factors": factors,
+                    "sum_over": sum_over
+                }
+                lhs_terms.append(term_record)
+
+                st.write(f"Vista previa LHS término {t+1}: `{build_term_text(term_record)}`")
+
+            # -----------------------
+            # LADO DERECHO
+            # -----------------------
+            st.markdown(f"### Lado derecho de {family_name}")
+
+            old_rhs = [] if old_family is None else old_family.get("rhs_terms", [])
+
+            rhs_num_terms = st.number_input(
+                f"Número de términos RHS en {family_name}",
+                min_value=1,
+                max_value=20,
+                value=max(1, len(old_rhs) if len(old_rhs) > 0 else 1),
+                step=1,
+                key=f"rhs_num_terms_{r}"
+            )
+
+            rhs_terms = []
+
+            for t in range(int(rhs_num_terms)):
+                st.markdown(f"**Término RHS {t+1}**")
+
+                old_term = old_rhs[t] if t < len(old_rhs) else None
+
+                c1, c2, c3 = st.columns([1, 2, 2])
+
+                with c1:
+                    sign = st.selectbox(
+                        f"Signo RHS término {t+1} en {family_name}",
+                        options=["+", "-"],
+                        index=0 if old_term is None else (0 if old_term.get("sign", "+") == "+" else 1),
+                        key=f"rhs_sign_{r}_{t}"
+                    )
+
+                with c2:
+                    num_factors = st.number_input(
+                        f"Número de factores RHS término {t+1} en {family_name}",
+                        min_value=1,
+                        max_value=4,
+                        value=1 if old_term is None else max(1, len(old_term.get("factors", []))),
+                        step=1,
+                        key=f"rhs_num_factors_{r}_{t}"
+                    )
+
+                with c3:
+                    default_sum_over = [] if old_term is None else old_term.get("sum_over", [])
+                    sum_over = st.multiselect(
+                        f"Sumar sobre índices RHS término {t+1} en {family_name}",
+                        options=list(index_specs.keys()),
+                        default=default_sum_over,
+                        key=f"rhs_sum_over_{r}_{t}"
+                    )
+
+                factors = []
+                old_factors = [] if old_term is None else old_term.get("factors", [])
+
+                for f in range(int(num_factors)):
+                    old_factor = old_factors[f] if f < len(old_factors) else None
+                    default_factor_type = "object" if old_factor is None else old_factor.get("type", "object")
+
+                    cfa, cfb, cfc = st.columns([1.5, 2.5, 2])
+
+                    with cfa:
+                        factor_type = st.selectbox(
+                            f"Tipo factor RHS {f+1} término {t+1} en {family_name}",
+                            options=["object", "constant"],
+                            index=0 if default_factor_type == "object" else 1,
+                            format_func=lambda x: "Parámetro/Variable" if x == "object" else "Constante",
+                            key=f"rhs_factor_type_{r}_{t}_{f}"
+                        )
+
+                    if factor_type == "object":
+                        default_label = expr_catalog_labels[0] if len(expr_catalog_labels) > 0 else None
+                        if old_factor is not None and old_factor.get("type") == "object":
+                            default_label = old_factor.get("label", default_label)
+
+                        if len(expr_catalog_labels) == 0:
+                            st.error("No hay objetos disponibles.")
+                        else:
+                            with cfb:
+                                chosen_label = st.selectbox(
+                                    f"Objeto RHS factor {f+1} término {t+1} en {family_name}",
+                                    options=expr_catalog_labels,
+                                    index=expr_catalog_labels.index(default_label) if default_label in expr_catalog_labels else 0,
+                                    key=f"rhs_factor_object_{r}_{t}_{f}"
+                                )
+
+                            item = expr_label_to_item[chosen_label]
+                            factors.append({
+                                "type": "object",
+                                "kind": item["kind"],
+                                "name": item["name"],
+                                "indices": item["indices"],
+                                "label": item["label"]
+                            })
+
+                            with cfc:
+                                st.write(f"Índices: {', '.join(item['indices']) if len(item['indices']) > 0 else 'ninguno'}")
+
+                    else:
+                        default_value = 0.0
+                        if old_factor is not None and old_factor.get("type") == "constant":
+                            default_value = float(old_factor.get("value", 0.0))
+
+                        with cfb:
+                            const_val = st.number_input(
+                                f"Valor constante RHS factor {f+1} término {t+1} en {family_name}",
+                                value=default_value,
+                                key=f"rhs_factor_const_{r}_{t}_{f}"
+                            )
+
+                        factors.append({
+                            "type": "constant",
+                            "value": float(const_val)
+                        })
+
+                term_record = {
+                    "sign": sign,
+                    "factors": factors,
+                    "sum_over": sum_over
+                }
+                rhs_terms.append(term_record)
+
+                st.write(f"Vista previa RHS término {t+1}: `{build_term_text(term_record)}`")
+
+            family_record = {
+                "name": family_name,
+                "forall": forall,
+                "sense": sense,
+                "lhs_terms": lhs_terms,
+                "rhs_terms": rhs_terms
+            }
+
+            family_errors = validate_constraint_family(family_record)
+
+            st.markdown(f"### Vista previa de la familia {family_name}")
+            st.code(build_constraint_family_text(family_record), language="text")
+
+            if len(family_errors) > 0:
+                for err in family_errors:
+                    st.error(err)
+            else:
+                st.success("La familia de restricciones está estructuralmente consistente.")
+
+            new_constraint_families.append(family_record)
+
+        spec["constraints"] = new_constraint_families
+
+        # ====================================================
+        # 2.4 RESUMEN GENERAL
+        # ====================================================
+        st.markdown("---")
+        st.subheader("4. Resumen de la definición del modelo")
+
+        st.write("**Función objetivo:**")
+        st.code(f"{sense_symbol}  {obj_text}", language="text")
+
+        st.write("**Familias de restricciones:**")
+        if len(new_constraint_families) == 0:
+            st.info("No hay familias de restricciones definidas.")
+        else:
+            for fam in new_constraint_families:
+                st.code(build_constraint_family_text(fam), language="text")
 
 # ============================================================
 # SECCIÓN 3: SALIDAS DEL MODELO
