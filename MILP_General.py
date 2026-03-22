@@ -1632,9 +1632,10 @@ elif section == "Definición del modelo":
         obj_errors = validate_objective_terms(objective_terms)
 
         st.markdown("### Vista previa de la función objetivo")
-        sense_symbol = "min" if sense == "minimize" else "max"
+        sense_symbol = r"\min" if sense == "minimize" else r"\max"
         obj_text = build_expression_text(objective_terms)
-        st.code(f"{sense_symbol}  {obj_text}", language="text")
+        obj_latex = build_expression_latex(objective_terms)
+        st.latex(rf"{sense_symbol}\ Z = {obj_latex}")
 
         if len(obj_errors) > 0:
             for err in obj_errors:
