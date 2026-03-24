@@ -1799,7 +1799,7 @@ elif section == "Salidas del modelo":
         index=0
     )
 
-    solve_button = st.button("Construir y resolver modelo")
+    solve_button = st.button("Resolver modelo")
 
     if solve_button:
         try:
