@@ -5,6 +5,26 @@ import itertools
 from typing import Dict, List, Tuple, Any
 import pyomo.environ as pyo
 
+
+# =================== MARCA DE AGUA ===================
+watermark = """
+<style>
+.watermark {
+    position: fixed;
+    top: 150px;
+    right: 25px;
+    opacity: 0.95;
+    font-size: 22px;
+    font-weight: 900;
+    color: #ff4b4b;
+    text-shadow: 1px 1px 2px #000;
+    z-index: 2000;
+}
+</style>
+<div class="watermark">by M.Sc. Dilan Mogollón</div>
+"""
+st.markdown(watermark, unsafe_allow_html=True)
+
 # ============================================================
 # CONFIGURACIÓN GENERAL
 # ============================================================
