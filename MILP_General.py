@@ -1961,7 +1961,10 @@ elif section == "Definición del modelo":
                     st.latex(build_constraint_family_latex(fam))
 elif section == "Salidas del modelo":
 
-    st.header("Resultados")
+    info_hero(
+        "3.Resultados",
+        "Se muestra la solución óptima y la configuración de las variables"
+    )
 
     spec = st.session_state["model_spec"]
 
