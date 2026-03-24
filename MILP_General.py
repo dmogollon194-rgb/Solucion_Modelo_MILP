@@ -4,7 +4,7 @@ import numpy as np
 import itertools
 import json
 from typing import Dict, List, Tuple, Any
-
+import pyomo.environ as pyo
 
 # ============================================================
 # CONFIGURACIÓN GENERAL
@@ -455,7 +455,292 @@ def build_constraint_family_latex(family: Dict[str, Any]) -> str:
 
     return txt
 
+# ============================================================
+# UTILIDADES PARA CONSTRUIR Y RESOLVER EN PYOMO
+# ============================================================
 
+def pyomo_domain_from_code(domain_code: str):
+    domain_map = {
+        "Binary": pyo.Binary,
+        "NonNegativeReals": pyo.NonNegativeReals,
+        "NonNegativeIntegers": pyo.NonNegativeIntegers,
+    }
+    if domain_code not in domain_map:
+        raise ValueError(f"Dominio no soportado: {domain_code}")
+    return domain_map[domain_code]
+
+
+def get_component_value(model, factor: Dict[str, Any], env: Dict[str, Any]):
+    if factor["type"] == "constant":
+        return float(factor["value"])
+
+    if factor["type"] != "object":
+        raise ValueError("Tipo de factor no soportado.")
+
+    name = factor["name"]
+    idxs = factor["indices"]
+    kind = factor["kind"]
+
+    if kind == "parameter":
+        comp = getattr(model, f"par_{name}")
+    elif kind == "variable":
+        comp = getattr(model, f"var_{name}")
+    else:
+        raise ValueError(f"Kind no soportado: {kind}")
+
+    if len(idxs) == 0:
+        return comp
+
+    try:
+        key = tuple(env[idx] for idx in idxs)
+    except KeyError as e:
+        raise ValueError(
+            f"Falta el índice `{e.args[0]}` en el entorno al evaluar `{name}[{', '.join(idxs)}]`."
+        )
+
+    if len(key) == 1:
+        return comp[key[0]]
+    return comp[key]
+
+
+def count_variable_factors(term: Dict[str, Any]) -> int:
+    c = 0
+    for fac in term.get("factors", []):
+        if fac["type"] == "object" and fac.get("kind") == "variable":
+            c += 1
+    return c
+
+
+def validate_linearity_of_term(term: Dict[str, Any], context: str = "") -> List[str]:
+    errors = []
+    num_var_factors = count_variable_factors(term)
+    if num_var_factors > 1:
+        errors.append(
+            f"{context} tiene {num_var_factors} factores variables en un mismo término. "
+            "Eso genera no linealidad y esta versión solo soporta modelos lineales."
+        )
+    return errors
+
+
+def validate_linearity_of_model(spec: Dict[str, Any]) -> List[str]:
+    errors = []
+
+    obj = spec.get("objective", None)
+    if obj is not None:
+        for i, term in enumerate(obj.get("terms", []), start=1):
+            errors.extend(validate_linearity_of_term(term, context=f"FO término {i}"))
+
+    for r, fam in enumerate(spec.get("constraints", []), start=1):
+        for i, term in enumerate(fam.get("lhs_terms", []), start=1):
+            errors.extend(validate_linearity_of_term(term, context=f"Restricción {fam.get('name', f'R{r}')}, LHS término {i}"))
+        for i, term in enumerate(fam.get("rhs_terms", []), start=1):
+            errors.extend(validate_linearity_of_term(term, context=f"Restricción {fam.get('name', f'R{r}')}, RHS término {i}"))
+
+    return errors
+
+
+def build_base_term_value(model, term: Dict[str, Any], env: Dict[str, Any]):
+    factors = term.get("factors", [])
+    if len(factors) == 0:
+        val = 0.0
+    else:
+        val = 1
+        for fac in factors:
+            val = val * get_component_value(model, fac, env)
+
+    sign = term.get("sign", "+")
+    if sign == "-":
+        val = -val
+
+    return val
+
+
+def evaluate_term_with_sums(model, term: Dict[str, Any], env: Dict[str, Any]):
+    sum_over = term.get("sum_over", [])
+
+    def recurse(pos: int, local_env: Dict[str, Any]):
+        if pos == len(sum_over):
+            return build_base_term_value(model, term, local_env)
+
+        idx_name = sum_over[pos]
+        pyomo_set = getattr(model, f"set_{idx_name}")
+
+        return sum(
+            recurse(pos + 1, {**local_env, idx_name: idx_val})
+            for idx_val in pyomo_set
+        )
+
+    return recurse(0, dict(env))
+
+
+def build_expression_pyomo(model, terms: List[Dict[str, Any]], env: Dict[str, Any]):
+    if len(terms) == 0:
+        return 0
+    expr = 0
+    for term in terms:
+        expr += evaluate_term_with_sums(model, term, env)
+    return expr
+
+
+def build_pyomo_model_from_spec(spec: Dict[str, Any]):
+    model = pyo.ConcreteModel()
+
+    index_specs = spec["indices"]
+    for idx_name, idx_spec in index_specs.items():
+        setattr(
+            model,
+            f"set_{idx_name}",
+            pyo.Set(initialize=idx_spec["elements"], ordered=True)
+        )
+
+    for pname, pspec in spec["parameters"].items():
+        idxs = pspec["indices"]
+        values = pspec["values"]
+
+        if len(idxs) == 0:
+            comp = pyo.Param(initialize=float(values["__scalar__"]), mutable=False)
+        else:
+            pyomo_sets = [getattr(model, f"set_{idx}") for idx in idxs]
+
+            init_dict = {}
+            combos = cartesian_labels(idxs, index_specs)
+            for combo in combos:
+                val = float(values.get(str(combo), 0.0))
+                if len(combo) == 1:
+                    init_dict[combo[0]] = val
+                else:
+                    init_dict[combo] = val
+
+            comp = pyo.Param(*pyomo_sets, initialize=init_dict, mutable=False)
+
+        setattr(model, f"par_{pname}", comp)
+
+    for vname, vspec in spec["variables"].items():
+        idxs = vspec["indices"]
+        domain = pyomo_domain_from_code(vspec["domain"])
+
+        if len(idxs) == 0:
+            comp = pyo.Var(domain=domain)
+        else:
+            pyomo_sets = [getattr(model, f"set_{idx}") for idx in idxs]
+            comp = pyo.Var(*pyomo_sets, domain=domain)
+
+        setattr(model, f"var_{vname}", comp)
+
+    obj = spec.get("objective", None)
+    if obj is None:
+        raise ValueError("No hay función objetivo definida.")
+
+    objective_terms = obj.get("terms", [])
+    sense = obj.get("sense", "minimize")
+
+    obj_expr = build_expression_pyomo(model, objective_terms, env={})
+    obj_sense = pyo.minimize if sense == "minimize" else pyo.maximize
+
+    model.OBJ = pyo.Objective(expr=obj_expr, sense=obj_sense)
+
+    for c_idx, fam in enumerate(spec.get("constraints", []), start=1):
+        fname = fam.get("name", f"R{c_idx}")
+        lhs_terms = fam.get("lhs_terms", [])
+        rhs_terms = fam.get("rhs_terms", [])
+        forall = fam.get("forall", [])
+        sense_f = fam.get("sense", "<=")
+
+        if len(forall) == 0:
+            lhs_expr = build_expression_pyomo(model, lhs_terms, env={})
+            rhs_expr = build_expression_pyomo(model, rhs_terms, env={})
+
+            if sense_f == "<=":
+                con = pyo.Constraint(expr=lhs_expr <= rhs_expr)
+            elif sense_f == ">=":
+                con = pyo.Constraint(expr=lhs_expr >= rhs_expr)
+            else:
+                con = pyo.Constraint(expr=lhs_expr == rhs_expr)
+
+        else:
+            pyomo_sets = [getattr(model, f"set_{idx}") for idx in forall]
+
+            def make_rule(lhs_terms_local, rhs_terms_local, forall_local, sense_local):
+                def _rule(m, *args):
+                    env = dict(zip(forall_local, args))
+                    lhs_expr = build_expression_pyomo(m, lhs_terms_local, env)
+                    rhs_expr = build_expression_pyomo(m, rhs_terms_local, env)
+
+                    if sense_local == "<=":
+                        return lhs_expr <= rhs_expr
+                    elif sense_local == ">=":
+                        return lhs_expr >= rhs_expr
+                    else:
+                        return lhs_expr == rhs_expr
+                return _rule
+
+            con = pyo.Constraint(
+                *pyomo_sets,
+                rule=make_rule(lhs_terms, rhs_terms, forall, sense_f)
+            )
+
+        setattr(model, f"con_{fname}", con)
+
+    return model
+
+
+def solver_factory_from_name(solver_name: str):
+    if solver_name == "appsi_highs":
+        return pyo.SolverFactory("appsi_highs")
+    elif solver_name == "glpk":
+        return pyo.SolverFactory("glpk")
+    elif solver_name == "cbc":
+        return pyo.SolverFactory("cbc")
+    else:
+        raise ValueError(f"Solver no soportado: {solver_name}")
+
+
+def variable_solution_to_dataframe(model, vname: str, vspec: Dict[str, Any], index_specs: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
+    comp = getattr(model, f"var_{vname}")
+    idxs = vspec["indices"]
+
+    if len(idxs) == 0:
+        return pd.DataFrame({
+            "variable": [vname],
+            "value": [pyo.value(comp)]
+        })
+
+    combos = cartesian_labels(idxs, index_specs)
+    rows = []
+
+    for combo in combos:
+        if len(combo) == 1:
+            val = pyo.value(comp[combo[0]])
+        else:
+            val = pyo.value(comp[combo])
+
+        row = {}
+        for pos, idx in enumerate(idxs):
+            row[idx] = combo[pos]
+        row["value"] = val
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+def all_variables_solution_flat(model, spec: Dict[str, Any]) -> pd.DataFrame:
+    rows = []
+    for vname, vspec in spec["variables"].items():
+        df = variable_solution_to_dataframe(model, vname, vspec, spec["indices"])
+        df.insert(0, "variable_name", vname)
+        rows.append(df)
+
+    if len(rows) == 0:
+        return pd.DataFrame()
+
+    return pd.concat(rows, ignore_index=True)
+
+
+def nonzero_variables_solution_flat(model, spec: Dict[str, Any], tol: float = 1e-9) -> pd.DataFrame:
+    df = all_variables_solution_flat(model, spec)
+    if df.empty:
+        return df
+    return df[df["value"].abs() > tol].reset_index(drop=True)
 # ============================================================
 # BARRA LATERAL / NAVEGACIÓN
 # ============================================================
@@ -1458,106 +1743,159 @@ elif section == "Salidas del modelo":
 
     st.header("Salidas del modelo")
 
-    st.info(
-        "Esta sección queda preparada para la fase en la que el modelo ya tenga "
-        "función objetivo, restricciones y solución."
+    spec = st.session_state["model_spec"]
+
+    st.markdown("---")
+    st.subheader("1. Validación previa")
+
+    validation_errors = []
+
+    if spec["objective"] is None:
+        validation_errors.append("No hay función objetivo definida.")
+    else:
+        validation_errors.extend(validate_objective_terms(spec["objective"].get("terms", [])))
+
+    for fam in spec.get("constraints", []):
+        validation_errors.extend(validate_constraint_family(fam))
+
+    validation_errors.extend(validate_linearity_of_model(spec))
+
+    if len(spec["variables"]) == 0:
+        validation_errors.append("No hay variables definidas.")
+
+    if len(spec["indices"]) == 0:
+        validation_errors.append("No hay índices definidos.")
+
+    if len(validation_errors) > 0:
+        for err in validation_errors:
+            st.error(err)
+        st.stop()
+    else:
+        st.success("La especificación es válida para intentar construir y resolver el modelo.")
+
+    st.markdown("---")
+    st.subheader("2. Resumen del modelo")
+
+    if spec["objective"] is not None:
+        sense_obj = spec["objective"]["sense"]
+        terms_obj = spec["objective"]["terms"]
+        sense_symbol_obj = r"\min" if sense_obj == "minimize" else r"\max"
+        st.write("**Función objetivo:**")
+        st.latex(rf"{sense_symbol_obj}\ Z = {build_expression_latex(terms_obj)}")
+
+    st.write("**Restricciones:**")
+    if len(spec["constraints"]) == 0:
+        st.info("No hay restricciones definidas.")
+    else:
+        for fam in spec["constraints"]:
+            st.latex(build_constraint_family_latex(fam))
+
+    st.markdown("---")
+    st.subheader("3. Resolver modelo")
+
+    solver_name = st.selectbox(
+        "Selecciona el solver",
+        options=["appsi_highs", "glpk", "cbc"],
+        index=0
     )
 
-    st.markdown("---")
-    st.subheader("Especificación actual del modelo")
+    solve_button = st.button("Construir y resolver modelo")
 
-    model_spec = st.session_state["model_spec"]
+    if solve_button:
+        try:
+            model = build_pyomo_model_from_spec(spec)
+            solver = solver_factory_from_name(solver_name)
+            result = solver.solve(model)
 
-    tab1, tab2 = st.tabs(["Resumen algebraico", "JSON del modelo"])
+            termination = str(result.solver.termination_condition)
+            status = str(result.solver.status)
 
-    with tab1:
-        st.subheader("Índices")
-        if len(model_spec["indices"]) == 0:
-            st.info("No hay índices definidos.")
-        else:
-            for idx_name, idx_spec in model_spec["indices"].items():
-                st.write(
-                    f"- `{idx_name}` con tamaño `{idx_spec['size']}` "
-                    f"y elementos: {', '.join(idx_spec['elements'])}"
-                )
+            obj_value = pyo.value(model.OBJ)
 
-        st.subheader("Parámetros")
-        if len(model_spec["parameters"]) == 0:
-            st.info("No hay parámetros definidos.")
-        else:
-            for pname, pspec in model_spec["parameters"].items():
-                st.write(
-                    f"- `{pretty_param_signature(pname, pspec['indices'])}` "
-                    f"({pspec['mode']})"
-                )
+            st.session_state["model_spec"]["results"] = {
+                "solver_name": solver_name,
+                "termination_condition": termination,
+                "status": status,
+                "objective_value": obj_value,
+            }
 
-        st.subheader("Variables")
-        if len(model_spec["variables"]) == 0:
-            st.info("No hay variables definidas.")
-        else:
-            for vname, vspec in model_spec["variables"].items():
-                st.write(
-                    f"- `{pretty_var_signature(vname, vspec['indices'])}` "
-                    f"en dominio `{infer_domain_text(vspec['domain'])}`"
-                )
+            st.session_state["solved_model_object"] = model
 
-        st.subheader("Función objetivo")
-        if model_spec["objective"] is None:
-            st.info("No hay función objetivo definida.")
-        else:
-            sense_obj = model_spec["objective"]["sense"]
-            terms_obj = model_spec["objective"]["terms"]
-            sense_symbol_obj = r"\min" if sense_obj == "minimize" else r"\max"
-            st.latex(rf"{sense_symbol_obj}\ Z = {build_expression_latex(terms_obj)}")
+            st.success("Modelo resuelto correctamente.")
 
-        st.subheader("Restricciones")
-        if len(model_spec["constraints"]) == 0:
-            st.info("No hay familias de restricciones definidas.")
-        else:
-            for fam in model_spec["constraints"]:
-                st.latex(build_constraint_family_latex(fam))
-
-    with tab2:
-        spec_json = json.dumps(
-            model_spec_as_jsonable(model_spec),
-            indent=2,
-            ensure_ascii=False
-        )
-        st.code(spec_json, language="json")
-
-        st.download_button(
-            "Descargar especificación JSON",
-            data=spec_json.encode("utf-8"),
-            file_name="model_spec.json",
-            mime="application/json"
-        )
+        except Exception as e:
+            st.error(f"Error al construir o resolver el modelo: {e}")
+            st.stop()
 
     st.markdown("---")
-    st.subheader("Exportaciones rápidas")
+    st.subheader("4. Resultados")
 
-    if len(model_spec["parameters"]) == 0:
-        st.info("Define al menos un parámetro para habilitar exportaciones.")
+    results = st.session_state["model_spec"].get("results", None)
+    solved_model = st.session_state.get("solved_model_object", None)
+
+    if results is None or solved_model is None:
+        st.info("Aún no has resuelto el modelo.")
     else:
-        param_names = list(model_spec["parameters"].keys())
-        selected_param_for_csv = st.selectbox(
-            "Selecciona un parámetro para exportar sus valores a CSV",
-            options=param_names,
-            key="selected_param_for_csv"
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Solver", results["solver_name"])
+        with c2:
+            st.metric("Status", results["status"])
+        with c3:
+            st.metric("Termination", results["termination_condition"])
+
+        st.metric("Valor óptimo", f"{results['objective_value']:.6f}")
+
+        st.markdown("---")
+        st.subheader("5. Solución por variable")
+
+        variable_names = list(spec["variables"].keys())
+        selected_var = st.selectbox(
+            "Selecciona una variable para ver su solución",
+            options=variable_names
         )
 
-        pspec = model_spec["parameters"][selected_param_for_csv]
-        export_df = parameter_preview_dataframe(
-            selected_param_for_csv,
-            pspec,
-            model_spec["indices"]
+        var_df = variable_solution_to_dataframe(
+            solved_model,
+            selected_var,
+            spec["variables"][selected_var],
+            spec["indices"]
         )
 
-        st.dataframe(export_df, use_container_width=True, hide_index=True)
+        st.dataframe(var_df, use_container_width=True, hide_index=True)
 
-        csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+        csv_var = var_df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "Descargar parámetro en CSV",
-            data=csv_bytes,
-            file_name=f"{selected_param_for_csv}.csv",
+            f"Descargar solución de {selected_var} en CSV",
+            data=csv_var,
+            file_name=f"solucion_{selected_var}.csv",
+            mime="text/csv"
+        )
+
+        st.markdown("---")
+        st.subheader("6. Todas las variables")
+
+        all_df = all_variables_solution_flat(solved_model, spec)
+        st.dataframe(all_df, use_container_width=True, hide_index=True)
+
+        csv_all = all_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Descargar todas las variables en CSV",
+            data=csv_all,
+            file_name="solucion_todas_las_variables.csv",
+            mime="text/csv"
+        )
+
+        st.markdown("---")
+        st.subheader("7. Variables no nulas")
+
+        nz_df = nonzero_variables_solution_flat(solved_model, spec)
+        st.dataframe(nz_df, use_container_width=True, hide_index=True)
+
+        csv_nz = nz_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Descargar variables no nulas en CSV",
+            data=csv_nz,
+            file_name="solucion_variables_no_nulas.csv",
             mime="text/csv"
         )
