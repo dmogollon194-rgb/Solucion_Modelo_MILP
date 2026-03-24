@@ -966,13 +966,68 @@ def result_wide_card(title: str, value: Any):
         """,
         unsafe_allow_html=True
     )
+def count_expanded_constraints(spec: Dict[str, Any]) -> int:
+    """
+    Cuenta el número total de restricciones instanciadas a partir de las familias,
+    expandiendo los índices del 'forall'.
+    """
+    total = 0
+    index_specs = spec.get("indices", {})
+    constraint_families = spec.get("constraints", [])
 
+    for fam in constraint_families:
+        forall = fam.get("forall", [])
+
+        if len(forall) == 0:
+            total += 1
+        else:
+            num = 1
+            valid_family = True
+
+            for idx in forall:
+                if idx not in index_specs:
+                    valid_family = False
+                    break
+                num *= int(index_specs[idx]["size"])
+
+            if valid_family:
+                total += num
+
+    return total
 
 # ============================================================
 # BARRA LATERAL / NAVEGACIÓN
 # ============================================================
 
-st.sidebar.title("Navegación")
+spec = st.session_state["model_spec"]
+
+num_indices = len(spec["indices"])
+num_variables = len(spec["variables"])
+num_restricciones = count_expanded_constraints(spec)
+
+st.sidebar.markdown("""
+    <div style="
+        padding: 0.4rem 0 1rem 0;
+        border-bottom: 1px solid rgba(61, 132, 255, 0.18);
+        margin-bottom: 1rem;
+    ">
+        <div style="
+            font-size: 1.45rem;
+            font-weight: 800;
+            color: white;
+            margin-bottom: 0.35rem;
+        ">
+            Navegación
+        </div>
+        <div style="
+            color: #b9c9e8;
+            font-size: 0.92rem;
+            line-height: 1.4;
+        ">
+            Explora cada etapa de construcción y solución del modelo.
+        </div>
+    </div>
+""", unsafe_allow_html=True)
 
 section = st.sidebar.radio(
     "Ir a:",
@@ -985,34 +1040,81 @@ section = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Estado actual")
 
-spec = st.session_state["model_spec"]
-st.sidebar.write(f"Índices: {len(spec['indices'])}")
-st.sidebar.write(f"Parámetros: {len(spec['parameters'])}")
-st.sidebar.write(f"Variables: {len(spec['variables'])}")
+st.sidebar.markdown("""
+    <div style="
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: white;
+        margin-bottom: 0.8rem;
+    ">
+        Estado actual
+    </div>
+""", unsafe_allow_html=True)
+
+col1, col2 = st.sidebar.columns(2)
+with col1:
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, rgba(8,22,55,0.95), rgba(3,10,28,0.98));
+            border: 1px solid rgba(61, 132, 255, 0.22);
+            border-radius: 14px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+            box-shadow: 0 0 0 1px rgba(61, 132, 255, 0.05), 0 8px 20px rgba(0,0,0,0.25);
+        ">
+            <div style="font-size: 0.88rem; color: #cfe0ff; font-weight: 700;">Índices</div>
+            <div style="font-size: 1.8rem; color: white; font-weight: 800; line-height: 1.1;">{num_indices}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+with col2:
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, rgba(8,22,55,0.95), rgba(3,10,28,0.98));
+            border: 1px solid rgba(61, 132, 255, 0.22);
+            border-radius: 14px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+            box-shadow: 0 0 0 1px rgba(61, 132, 255, 0.05), 0 8px 20px rgba(0,0,0,0.25);
+        ">
+            <div style="font-size: 0.88rem; color: #cfe0ff; font-weight: 700;">Variables</div>
+            <div style="font-size: 1.8rem; color: white; font-weight: 800; line-height: 1.1;">{num_variables}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+st.sidebar.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, rgba(8,22,55,0.95), rgba(3,10,28,0.98));
+        border: 1px solid rgba(61, 132, 255, 0.22);
+        border-radius: 14px;
+        padding: 12px 14px;
+        margin-top: 2px;
+        margin-bottom: 12px;
+        box-shadow: 0 0 0 1px rgba(61, 132, 255, 0.05), 0 8px 20px rgba(0,0,0,0.25);
+    ">
+        <div style="font-size: 0.9rem; color: #cfe0ff; font-weight: 700;">Restricciones definidas</div>
+        <div style="font-size: 1.95rem; color: white; font-weight: 800; line-height: 1.1;">{num_restricciones}</div>
+    </div>
+""", unsafe_allow_html=True)
+
+st.sidebar.markdown("""
+    <div style="
+        margin-top: 0.6rem;
+        padding: 0.75rem 0.85rem;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(61, 132, 255, 0.12);
+        border-radius: 12px;
+        color: #b9c9e8;
+        font-size: 0.87rem;
+        line-height: 1.45;
+    ">
+        El número de restricciones corresponde al total expandido según los índices definidos en cada familia.
+    </div>
+""", unsafe_allow_html=True)
 
 st.title("Solucionador de Modelos Lineales")
-st.caption("Esta aplicación está diseñada para solucionar modelos lineales con un solo objetivo. ")
-
-if section == "Ingreso de información":
-
-    info_hero(
-        "1. Ingreso de información",
-        "Define los índices, parámetros y variables que conformarán la estructura base del modelo."
-    )
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        metric_card("Índices", len(st.session_state["model_spec"]["indices"]))
-    with c2:
-        metric_card("Parámetros", len(st.session_state["model_spec"]["parameters"]))
-    with c3:
-        metric_card("Variables", len(st.session_state["model_spec"]["variables"]))
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    tab_ind, tab_par, tab_var = st.tabs(["Índices", "Parámetros", "Variables"])
+st.caption("Esta aplicación está diseñada para solucionar modelos lineales con un solo objetivo.")
 
     # ========================================================
     # TAB 1: ÍNDICES
