@@ -992,12 +992,10 @@ st.sidebar.write(f"Índices: {len(spec['indices'])}")
 st.sidebar.write(f"Parámetros: {len(spec['parameters'])}")
 st.sidebar.write(f"Variables: {len(spec['variables'])}")
 
-st.title("📐 Constructor de Modelos Algebraicos")
-st.caption("Definición, estructuración y resolución visual de modelos algebraicos.")
+st.title("Solucionador de Modelos Lineales")
+st.caption("Esta aplicación está diseñada para solucionar modelos lineales con un solo objetivo. ")
 
 if section == "Ingreso de información":
-
-    st.caption("Definición, estructuración y resolución visual de modelos algebraicos.")
 
     info_hero(
         "1. Ingreso de información",
@@ -1014,7 +1012,7 @@ if section == "Ingreso de información":
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    tab_ind, tab_par, tab_var = st.tabs(["🔢 Índices", "📊 Parámetros", "✖️ Variables"])
+    tab_ind, tab_par, tab_var = st.tabs(["Índices", "Parámetros", "Variables"])
 
     # ========================================================
     # TAB 1: ÍNDICES
@@ -1436,8 +1434,10 @@ if section == "Ingreso de información":
 
 elif section == "Definición del modelo":
 
-    st.caption("Versión Optimizada: Definición, estructuración y resolución rápida de modelos.")
-    st.markdown("## Construcción del Modelo Matemático")
+    info_hero(
+        "2. Definición del modelo",
+        "Defina la función objetivo, restricciones y visualice su modelo de manera matematica"
+    )
 
     spec = st.session_state["model_spec"]
     index_specs = spec["indices"]
@@ -1449,7 +1449,7 @@ elif section == "Definición del modelo":
         st.warning("Primero debes definir al menos una variable.")
     else:
         tab_obj, tab_rest, tab_resumen = st.tabs(
-            ["🎯 Función Objetivo", "🔗 Restricciones", "📋 Resumen LaTeX"]
+            ["Función Objetivo", "Restricciones", "Modelo matemático"]
         )
 
         # ====================================================
@@ -1991,31 +1991,13 @@ elif section == "Salidas del modelo":
         st.success("La especificación es válida para intentar construir y resolver el modelo.")
 
     tab_modelo, tab_resolver, tab_vars = st.tabs(
-        ["📘 Resumen del modelo", "🚀 Resolver", "📊 Variables solución"]
+        ["Resolver", "Variables solución"]
     )
-
-    with tab_modelo:
-        st.subheader("Resumen del modelo")
-
-        if spec["objective"] is not None:
-            sense_obj = spec["objective"]["sense"]
-            terms_obj = spec["objective"]["terms"]
-            sense_symbol_obj = r"\min" if sense_obj == "minimize" else r"\max"
-            st.write("**Función objetivo:**")
-            st.latex(rf"{sense_symbol_obj}\ Z = {build_expression_latex(terms_obj)}")
-
-        st.write("**Restricciones:**")
-        if len(spec["constraints"]) == 0:
-            st.info("No hay restricciones definidas.")
-        else:
-            for fam in spec["constraints"]:
-                st.latex(build_constraint_family_latex(fam))
 
     with tab_resolver:
         st.subheader("Resolver modelo")
 
         solver_name = "appsi_highs"
-        st.info(f"Solver por defecto: **{solver_name}**")
 
         solve_button = st.button("Resolver modelo", type="primary")
 
