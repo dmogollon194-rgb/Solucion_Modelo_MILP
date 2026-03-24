@@ -2032,9 +2032,7 @@ elif section == "Salidas del modelo":
         if results is None or solved_model is None:
             st.info("Aún no has resuelto el modelo.")
         else:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                result_card("Solver", results["solver_name"])
+            c2, c3 = st.columns(2)
             with c2:
                 result_card("Status", results["status"])
             with c3:
