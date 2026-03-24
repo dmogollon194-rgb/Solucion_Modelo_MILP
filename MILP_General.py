@@ -8,23 +8,21 @@ import streamlit as st
 
 
 # ============================================================
-# CONFIG
+# CONFIGURACIÓN GENERAL
 # ============================================================
 
 st.set_page_config(
-    page_title="Constructor de modelos algebraicos",
+    page_title="Constructor de Modelos Algebraicos",
     page_icon="📐",
     layout="wide",
 )
 
-APP_TITLE = "Constructor de modelos algebraicos"
-APP_SUBTITLE = "Definición estructural, construcción y solución de modelos lineales en Pyomo."
-DOMAIN_OPTIONS = ["Binary", "NonNegativeReals", "NonNegativeIntegers"]
 SOLVER_OPTIONS = ["appsi_highs", "glpk", "cbc"]
+DOMAIN_OPTIONS = ["Binary", "NonNegativeReals", "NonNegativeIntegers"]
 
 
 # ============================================================
-# ESTILO
+# ESTILOS
 # ============================================================
 
 def inject_css() -> None:
@@ -32,60 +30,63 @@ def inject_css() -> None:
         """
         <style>
             .block-container {
-                padding-top: 1.8rem;
-                padding-bottom: 2rem;
+                padding-top: 1.6rem;
+                padding-bottom: 2.0rem;
                 max-width: 1450px;
             }
 
             .main-title {
-                font-size: 2.4rem;
+                font-size: 2.25rem;
                 font-weight: 800;
-                margin-bottom: 0.2rem;
+                margin-bottom: 0.15rem;
                 line-height: 1.1;
             }
 
             .main-subtitle {
-                font-size: 1rem;
                 color: #9ca3af;
+                font-size: 0.98rem;
                 margin-bottom: 1.25rem;
             }
 
-            .section-card {
-                background: linear-gradient(180deg, rgba(18,24,38,0.95), rgba(10,14,24,0.92));
-                border: 1px solid rgba(148,163,184,0.18);
+            .section-box {
+                background: linear-gradient(180deg, rgba(10,17,33,0.94), rgba(4,10,22,0.96));
+                border: 1px solid rgba(86, 110, 158, 0.30);
                 border-radius: 18px;
-                padding: 1rem 1rem 0.8rem 1rem;
+                padding: 1.1rem 1.25rem;
                 margin-bottom: 1rem;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.16);
+                box-shadow: 0 10px 30px rgba(0,0,0,0.18);
             }
 
-            .soft-card {
-                background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(148,163,184,0.15);
-                border-radius: 14px;
-                padding: 0.85rem 0.9rem;
-                margin-bottom: 0.75rem;
+            .section-title {
+                font-size: 1.15rem;
+                font-weight: 750;
+                margin-bottom: 0.3rem;
+                color: #f3f4f6;
+            }
+
+            .section-text {
+                color: #cbd5e1;
+                font-size: 0.98rem;
+                line-height: 1.5;
             }
 
             .metric-card {
-                background: linear-gradient(180deg, rgba(16,24,40,0.95), rgba(9,13,22,0.92));
-                border: 1px solid rgba(99,102,241,0.18);
+                background: linear-gradient(180deg, rgba(15,23,42,0.96), rgba(5,10,20,0.96));
+                border: 1px solid rgba(110, 126, 160, 0.25);
                 border-radius: 16px;
                 padding: 1rem;
-                text-align: left;
-                min-height: 110px;
             }
 
-            .metric-label {
-                color: #9ca3af;
-                font-size: 0.92rem;
-                margin-bottom: 0.35rem;
+            div[data-testid="stMetric"] {
+                background: linear-gradient(180deg, rgba(15,23,42,0.96), rgba(5,10,20,0.96));
+                border: 1px solid rgba(110,126,160,0.22);
+                border-radius: 16px;
+                padding: 0.9rem 1rem;
             }
 
-            .metric-value {
-                font-size: 1.75rem;
-                font-weight: 750;
-                line-height: 1.15;
+            .small-note {
+                color: #94a3b8;
+                font-size: 0.9rem;
             }
 
             .pill {
@@ -93,25 +94,9 @@ def inject_css() -> None:
                 padding: 0.22rem 0.6rem;
                 border-radius: 999px;
                 font-size: 0.8rem;
-                border: 1px solid rgba(148,163,184,0.2);
+                border: 1px solid rgba(148,163,184,0.20);
                 background: rgba(255,255,255,0.04);
                 margin-right: 0.35rem;
-            }
-
-            .small-note {
-                color: #9ca3af;
-                font-size: 0.92rem;
-            }
-
-            div[data-testid="stMetric"] {
-                background: linear-gradient(180deg, rgba(18,24,38,0.95), rgba(9,13,22,0.92));
-                border: 1px solid rgba(148,163,184,0.16);
-                padding: 0.9rem 1rem;
-                border-radius: 16px;
-            }
-
-            section[data-testid="stSidebar"] {
-                border-right: 1px solid rgba(148,163,184,0.12);
             }
 
             .watermark {
@@ -126,7 +111,12 @@ def inject_css() -> None:
                 text-shadow: 1px 1px 2px #000;
                 pointer-events: none;
             }
+
+            section[data-testid="stSidebar"] {
+                border-right: 1px solid rgba(148,163,184,0.10);
+            }
         </style>
+
         <div class="watermark">by M.Sc. Dilan Mogollón</div>
         """,
         unsafe_allow_html=True,
@@ -137,7 +127,7 @@ inject_css()
 
 
 # ============================================================
-# SESSION STATE
+# ESTADO INICIAL
 # ============================================================
 
 def init_session_state() -> None:
@@ -152,29 +142,41 @@ def init_session_state() -> None:
         },
         "solved_model_object": None,
     }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
 
 init_session_state()
 
 
 # ============================================================
-# UTILIDADES GENERALES
+# BLOQUES VISUALES
 # ============================================================
 
-def info_card(title: str, subtitle: str = "") -> None:
+def section_banner(title: str, text: str = "") -> None:
     st.markdown(
         f"""
-        <div class="section-card">
-            <div style="font-size:1.1rem;font-weight:700;margin-bottom:0.25rem;">{title}</div>
-            <div class="small-note">{subtitle}</div>
+        <div class="section-box">
+            <div class="section-title">{title}</div>
+            <div class="section-text">{text}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+
+def top_header() -> None:
+    st.markdown('<div class="main-title">Constructor de Modelos Algebraicos</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="main-subtitle">Definición estructural, construcción y resolución de modelos en Pyomo.</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# UTILIDADES GENERALES
+# ============================================================
 
 def is_valid_symbol(name: str) -> bool:
     if not isinstance(name, str):
@@ -390,22 +392,6 @@ def term_free_indices(term: Dict[str, Any]) -> List[str]:
     return [idx for idx in used if idx not in summed]
 
 
-def build_term_text(term: Dict[str, Any]) -> str:
-    factors_txt = " * ".join(factor_to_text(f) for f in term["factors"]) if term["factors"] else "0"
-    if term.get("sum_over"):
-        sums = " ".join([f"Σ_{{{idx}}}" for idx in term["sum_over"]])
-        factors_txt = f"{sums} ({factors_txt})"
-    sign = "- " if term.get("sign", "+") == "-" else "+ "
-    return f"{sign}{factors_txt}"
-
-
-def build_expression_text(terms: List[Dict[str, Any]]) -> str:
-    if not terms:
-        return "0"
-    txt = " ".join(build_term_text(t) for t in terms).strip()
-    return txt[2:] if txt.startswith("+ ") else txt
-
-
 def build_term_latex(term: Dict[str, Any]) -> str:
     factors = term.get("factors", [])
     body = r" \cdot ".join(factor_to_latex(f) for f in factors) if factors else "0"
@@ -578,11 +564,9 @@ def build_pyomo_model_from_spec(spec: Dict[str, Any]):
     model = pyo.ConcreteModel()
     index_specs = spec["indices"]
 
-    # Sets
     for idx_name, idx_spec in index_specs.items():
         setattr(model, f"set_{idx_name}", pyo.Set(initialize=idx_spec["elements"], ordered=True))
 
-    # Params
     for pname, pspec in spec["parameters"].items():
         idxs = pspec["indices"]
         values = pspec["values"]
@@ -599,7 +583,6 @@ def build_pyomo_model_from_spec(spec: Dict[str, Any]):
 
         setattr(model, f"par_{pname}", comp)
 
-    # Vars
     for vname, vspec in spec["variables"].items():
         idxs = vspec["indices"]
         domain = pyomo_domain_from_code(vspec["domain"])
@@ -610,7 +593,6 @@ def build_pyomo_model_from_spec(spec: Dict[str, Any]):
             comp = pyo.Var(*pyomo_sets, domain=domain)
         setattr(model, f"var_{vname}", comp)
 
-    # Objective
     obj = spec.get("objective")
     if obj is None:
         raise ValueError("No hay función objetivo definida.")
@@ -619,7 +601,6 @@ def build_pyomo_model_from_spec(spec: Dict[str, Any]):
     obj_sense = pyo.minimize if obj["sense"] == "minimize" else pyo.maximize
     model.OBJ = pyo.Objective(expr=obj_expr, sense=obj_sense)
 
-    # Constraints
     for c_idx, fam in enumerate(spec.get("constraints", []), start=1):
         fname = fam.get("name", f"R{c_idx}")
         lhs_terms = fam.get("lhs_terms", [])
@@ -706,11 +687,6 @@ def nonzero_variables_solution_flat(model, spec: Dict[str, Any], tol: float = 1e
 # ============================================================
 # RENDER HELPERS
 # ============================================================
-
-def render_header() -> None:
-    st.markdown(f'<div class="main-title">{APP_TITLE}</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="main-subtitle">{APP_SUBTITLE}</div>', unsafe_allow_html=True)
-
 
 def render_spec_summary(spec: Dict[str, Any]) -> None:
     c1, c2, c3 = st.columns(3)
@@ -970,11 +946,10 @@ def render_parameter_editor(
 
 
 # ============================================================
-# SIDEBAR
+# ENCABEZADO Y SIDEBAR
 # ============================================================
 
-render_header()
-
+top_header()
 spec = st.session_state["model_spec"]
 
 st.sidebar.markdown("## Navegación")
@@ -996,14 +971,14 @@ st.sidebar.markdown(f'<span class="pill">Variables: {len(spec["variables"])}</sp
 # ============================================================
 
 if section == "Ingreso de información":
-    info_card("1. Ingreso de información", "Define índices, parámetros y variables del modelo.")
+    section_banner(
+        "1. Ingreso de información",
+        "Define los índices, parámetros y variables que conformarán la estructura base del modelo."
+    )
     render_spec_summary(spec)
 
-    # --------------------------------------------------------
-    # Índices
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("1. Índices")
+        st.subheader("Índices")
 
         current_indices = spec["indices"]
         num_indices = st.number_input(
@@ -1083,11 +1058,8 @@ if section == "Ingreso de información":
             )
             st.dataframe(preview, use_container_width=True, hide_index=True)
 
-    # --------------------------------------------------------
-    # Parámetros
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("2. Parámetros")
+        st.subheader("Parámetros")
 
         if not spec["indices"]:
             st.info("Primero define índices válidos.")
@@ -1180,11 +1152,8 @@ if section == "Ingreso de información":
                 )
                 st.dataframe(summary, use_container_width=True, hide_index=True)
 
-    # --------------------------------------------------------
-    # Variables
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("3. Variables")
+        st.subheader("Variables")
 
         if not spec["indices"]:
             st.info("Primero define índices válidos.")
@@ -1268,7 +1237,10 @@ if section == "Ingreso de información":
 # ============================================================
 
 elif section == "Definición del modelo":
-    info_card("2. Definición del modelo", "Construye la función objetivo y las familias de restricciones.")
+    section_banner(
+        "2. Definición del modelo",
+        "Construye la función objetivo y las familias de restricciones."
+    )
     spec = st.session_state["model_spec"]
 
     if not spec["indices"]:
@@ -1283,11 +1255,8 @@ elif section == "Definición del modelo":
     label_to_item = {obj["label"]: obj for obj in catalog}
     index_options = list(spec["indices"].keys())
 
-    # --------------------------------------------------------
-    # Sentido del problema
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("1. Tipo de problema")
+        st.subheader("Tipo de problema")
         current_obj = spec.get("objective")
         default_sense = "minimize" if current_obj is None else current_obj.get("sense", "minimize")
         sense = st.selectbox(
@@ -1297,11 +1266,8 @@ elif section == "Definición del modelo":
             format_func=lambda x: "Minimizar" if x == "minimize" else "Maximizar",
         )
 
-    # --------------------------------------------------------
-    # Función objetivo
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("2. Función objetivo")
+        st.subheader("Función objetivo")
         old_obj_terms = [] if current_obj is None else current_obj.get("terms", [])
 
         num_obj_terms = st.number_input(
@@ -1343,11 +1309,8 @@ elif section == "Definición del modelo":
         spec["objective"] = objective_record
         st.session_state["model_spec"] = spec
 
-    # --------------------------------------------------------
-    # Restricciones
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("3. Familias de restricciones")
+        st.subheader("Familias de restricciones")
         old_constraints = spec.get("constraints", [])
 
         num_families = st.number_input(
@@ -1458,11 +1421,8 @@ elif section == "Definición del modelo":
         spec["constraints"] = new_constraint_families
         st.session_state["model_spec"] = spec
 
-    # --------------------------------------------------------
-    # Resumen
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("4. Resumen de la definición")
+        st.subheader("Resumen de la definición")
         if spec["objective"] is not None:
             sense_symbol_resume = r"\min" if spec["objective"]["sense"] == "minimize" else r"\max"
             st.latex(rf"{sense_symbol_resume}\ Z = {build_expression_latex(spec['objective']['terms'])}")
@@ -1479,14 +1439,14 @@ elif section == "Definición del modelo":
 # ============================================================
 
 elif section == "Resolver modelo":
-    info_card("3. Resolver modelo", "Valida, construye y resuelve el modelo en Pyomo.")
+    section_banner(
+        "3. Resolver modelo",
+        "Valida, construye y resuelve el modelo a partir de la estructura definida."
+    )
     spec = st.session_state["model_spec"]
 
-    # --------------------------------------------------------
-    # Validación
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("1. Validación previa")
+        st.subheader("Validación previa")
 
         validation_errors = []
 
@@ -1511,11 +1471,8 @@ elif section == "Resolver modelo":
         else:
             st.success("La especificación es válida para construir e intentar resolver el modelo.")
 
-    # --------------------------------------------------------
-    # Resumen del modelo
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("2. Resumen del modelo")
+        st.subheader("Resumen del modelo")
 
         if spec["objective"] is not None:
             sense_symbol = r"\min" if spec["objective"]["sense"] == "minimize" else r"\max"
@@ -1527,16 +1484,13 @@ elif section == "Resolver modelo":
             for fam in spec["constraints"]:
                 st.latex(build_constraint_family_latex(fam))
 
-    # --------------------------------------------------------
-    # Resolver
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("3. Resolver modelo")
+        st.subheader("Resolución")
 
         solver_name = st.selectbox(
             "Selecciona el solver",
             options=SOLVER_OPTIONS,
-            index=SOLVER_OPTIONS.index("appsi_highs"),
+            index=0,
         )
 
         solve_button = st.button("Resolver modelo", type="primary", use_container_width=False)
@@ -1565,11 +1519,8 @@ elif section == "Resolver modelo":
                 st.session_state["solved_model_object"] = None
                 st.error(f"Error al construir o resolver el modelo: {e}")
 
-    # --------------------------------------------------------
-    # Resultados
-    # --------------------------------------------------------
     with st.container(border=True):
-        st.subheader("4. Resultados")
+        st.subheader("Resultados")
 
         results = st.session_state["model_spec"].get("results")
         solved_model = st.session_state.get("solved_model_object")
@@ -1587,14 +1538,11 @@ elif section == "Resolver modelo":
 
             st.metric("Valor óptimo", f"{results['objective_value']:,.6f}")
 
-    # --------------------------------------------------------
-    # Solución por variable
-    # --------------------------------------------------------
     if st.session_state["model_spec"].get("results") is not None and st.session_state.get("solved_model_object") is not None:
         solved_model = st.session_state["solved_model_object"]
 
         with st.container(border=True):
-            st.subheader("5. Solución por variable")
+            st.subheader("Solución por variable")
 
             variable_names = list(spec["variables"].keys())
             selected_var = st.selectbox("Selecciona una variable", options=variable_names)
@@ -1616,7 +1564,7 @@ elif section == "Resolver modelo":
             )
 
         with st.container(border=True):
-            st.subheader("6. Variables no nulas")
+            st.subheader("Variables no nulas")
 
             nz_df = nonzero_variables_solution_flat(solved_model, spec)
             if nz_df.empty:
