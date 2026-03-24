@@ -1137,7 +1137,6 @@ st.sidebar.markdown("""
         font-size: 0.87rem;
         line-height: 1.45;
     ">
-        El número de restricciones corresponde al total expandido según los índices definidos en cada familia.
     </div>
 """, unsafe_allow_html=True)
 
