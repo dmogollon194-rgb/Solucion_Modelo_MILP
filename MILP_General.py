@@ -995,6 +995,34 @@ def count_expanded_constraints(spec: Dict[str, Any]) -> int:
 
     return total
 
+def count_expanded_variables(spec: Dict[str, Any]) -> int:
+    """
+    Cuenta el número total de variables instanciadas,
+    expandiendo sus índices.
+    """
+    total = 0
+    index_specs = spec.get("indices", {})
+    variables = spec.get("variables", {})
+
+    for _, vspec in variables.items():
+        idxs = vspec.get("indices", [])
+
+        if len(idxs) == 0:
+            total += 1
+        else:
+            num = 1
+            valid_var = True
+
+            for idx in idxs:
+                if idx not in index_specs:
+                    valid_var = False
+                    break
+                num *= int(index_specs[idx]["size"])
+
+            if valid_var:
+                total += num
+
+    return total
 # ============================================================
 # BARRA LATERAL / NAVEGACIÓN
 # ============================================================
@@ -1002,7 +1030,7 @@ def count_expanded_constraints(spec: Dict[str, Any]) -> int:
 spec = st.session_state["model_spec"]
 
 num_indices = len(spec["indices"])
-num_variables = len(spec["variables"])
+num_variables = count_expanded_variables(spec)
 num_restricciones = count_expanded_constraints(spec)
 
 st.sidebar.markdown("""
