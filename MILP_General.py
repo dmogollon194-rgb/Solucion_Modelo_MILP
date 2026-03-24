@@ -1959,10 +1959,6 @@ elif section == "Definición del modelo":
             else:
                 for fam in spec["constraints"]:
                     st.latex(build_constraint_family_latex(fam))
-# ============================================================
-# SECCIÓN 3: SALIDAS DEL MODELO
-# ============================================================
-
 elif section == "Salidas del modelo":
 
     st.header("Resultados")
@@ -1994,112 +1990,122 @@ elif section == "Salidas del modelo":
     else:
         st.success("La especificación es válida para intentar construir y resolver el modelo.")
 
-    st.markdown("---")
-    st.subheader("Resumen del modelo")
+    tab_modelo, tab_resolver, tab_vars = st.tabs(
+        ["📘 Resumen del modelo", "🚀 Resolver", "📊 Variables solución"]
+    )
 
-    if spec["objective"] is not None:
-        sense_obj = spec["objective"]["sense"]
-        terms_obj = spec["objective"]["terms"]
-        sense_symbol_obj = r"\min" if sense_obj == "minimize" else r"\max"
-        st.write("**Función objetivo:**")
-        st.latex(rf"{sense_symbol_obj}\ Z = {build_expression_latex(terms_obj)}")
+    with tab_modelo:
+        st.subheader("Resumen del modelo")
 
-    st.write("**Restricciones:**")
-    if len(spec["constraints"]) == 0:
-        st.info("No hay restricciones definidas.")
-    else:
-        for fam in spec["constraints"]:
-            st.latex(build_constraint_family_latex(fam))
+        if spec["objective"] is not None:
+            sense_obj = spec["objective"]["sense"]
+            terms_obj = spec["objective"]["terms"]
+            sense_symbol_obj = r"\min" if sense_obj == "minimize" else r"\max"
+            st.write("**Función objetivo:**")
+            st.latex(rf"{sense_symbol_obj}\ Z = {build_expression_latex(terms_obj)}")
 
-    st.markdown("---")
-    st.subheader("Resolver modelo")
-
-    solver_name = "appsi_highs"
-    st.info(f"Solver por defecto: **{solver_name}**")
-
-    solve_button = st.button("Resolver modelo", type="primary")
-
-    if solve_button:
-        try:
-            model = build_pyomo_model_from_spec(spec)
-            solver = solver_factory_from_name(solver_name)
-            result = solver.solve(model)
-
-            termination = str(result.solver.termination_condition)
-            status = str(result.solver.status)
-            obj_value = pyo.value(model.OBJ)
-
-            st.session_state["model_spec"]["results"] = {
-                "solver_name": solver_name,
-                "termination_condition": termination,
-                "status": status,
-                "objective_value": obj_value,
-            }
-
-            st.session_state["solved_model_object"] = model
-
-            st.success("Modelo resuelto correctamente.")
-
-        except Exception as e:
-            st.error(f"Error al construir o resolver el modelo: {e}")
-            st.stop()
-
-    st.markdown("---")
-    st.subheader("Resultados")
-
-    results = st.session_state["model_spec"].get("results", None)
-    solved_model = st.session_state.get("solved_model_object", None)
-
-    if results is None or solved_model is None:
-        st.info("Aún no has resuelto el modelo.")
-    else:
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            result_card("Solver", results["solver_name"])
-        with c2:
-            result_card("Status", results["status"])
-        with c3:
-            result_card("Termination", results["termination_condition"])
-
-        result_wide_card("Valor óptimo", f"{results['objective_value']:,.6f}")
-
-        st.markdown("---")
-        st.subheader("Solución por variable")
-
-        variable_names = list(spec["variables"].keys())
-        selected_var = st.selectbox(
-            "Selecciona una variable para ver su solución",
-            options=variable_names
-        )
-
-        var_df = variable_solution_to_dataframe(
-            solved_model,
-            selected_var,
-            spec["variables"][selected_var],
-            spec["indices"]
-        )
-        st.dataframe(var_df, use_container_width=True, hide_index=True)
-
-        st.download_button(
-            "Descargar solución de la variable seleccionada en CSV",
-            data=var_df.to_csv(index=False).encode("utf-8"),
-            file_name=f"{selected_var}_solucion.csv",
-            mime="text/csv"
-        )
-
-        st.markdown("---")
-        st.subheader("Variables no nulas")
-
-        nz_df = nonzero_variables_solution_flat(solved_model, spec, tol=1e-9)
-
-        if nz_df.empty:
-            st.info("No hay variables no nulas.")
+        st.write("**Restricciones:**")
+        if len(spec["constraints"]) == 0:
+            st.info("No hay restricciones definidas.")
         else:
-            st.dataframe(nz_df, use_container_width=True, hide_index=True)
+            for fam in spec["constraints"]:
+                st.latex(build_constraint_family_latex(fam))
 
-        st.download_button(
-            "Descargar variables no nulas en CSV",
-            data=nz_df.to_csv(index=False).encode("utf-8"),
-            file_name="variables_no_nulas.csv",
-            mime="text/csv"
-        )
+    with tab_resolver:
+        st.subheader("Resolver modelo")
+
+        solver_name = "appsi_highs"
+        st.info(f"Solver por defecto: **{solver_name}**")
+
+        solve_button = st.button("Resolver modelo", type="primary")
+
+        if solve_button:
+            try:
+                model = build_pyomo_model_from_spec(spec)
+                solver = solver_factory_from_name(solver_name)
+                result = solver.solve(model)
+
+                termination = str(result.solver.termination_condition)
+                status = str(result.solver.status)
+                obj_value = pyo.value(model.OBJ)
+
+                st.session_state["model_spec"]["results"] = {
+                    "solver_name": solver_name,
+                    "termination_condition": termination,
+                    "status": status,
+                    "objective_value": obj_value,
+                }
+
+                st.session_state["solved_model_object"] = model
+
+                st.success("Modelo resuelto correctamente.")
+
+            except Exception as e:
+                st.error(f"Error al construir o resolver el modelo: {e}")
+                st.stop()
+
+        results = st.session_state["model_spec"].get("results", None)
+        solved_model = st.session_state.get("solved_model_object", None)
+
+        if results is None or solved_model is None:
+            st.info("Aún no has resuelto el modelo.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                result_card("Solver", results["solver_name"])
+            with c2:
+                result_card("Status", results["status"])
+            with c3:
+                result_card("Termination", results["termination_condition"])
+
+            result_wide_card("Valor óptimo", f"{results['objective_value']:,.6f}")
+
+    with tab_vars:
+        results = st.session_state["model_spec"].get("results", None)
+        solved_model = st.session_state.get("solved_model_object", None)
+
+        if results is None or solved_model is None:
+            st.info("Primero resuelve el modelo.")
+        else:
+            subtab_var, subtab_nz = st.tabs(["Seleccionar variable", "Variables no nulas"])
+
+            with subtab_var:
+                st.subheader("Solución por variable")
+
+                variable_names = list(spec["variables"].keys())
+                selected_var = st.selectbox(
+                    "Selecciona una variable para ver su solución",
+                    options=variable_names
+                )
+
+                var_df = variable_solution_to_dataframe(
+                    solved_model,
+                    selected_var,
+                    spec["variables"][selected_var],
+                    spec["indices"]
+                )
+                st.dataframe(var_df, use_container_width=True, hide_index=True)
+
+                st.download_button(
+                    "Descargar solución de la variable seleccionada en CSV",
+                    data=var_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{selected_var}_solucion.csv",
+                    mime="text/csv"
+                )
+
+            with subtab_nz:
+                st.subheader("Variables no nulas")
+
+                nz_df = nonzero_variables_solution_flat(solved_model, spec, tol=1e-9)
+
+                if nz_df.empty:
+                    st.info("No hay variables no nulas.")
+                else:
+                    st.dataframe(nz_df, use_container_width=True, hide_index=True)
+
+                st.download_button(
+                    "Descargar variables no nulas en CSV",
+                    data=nz_df.to_csv(index=False).encode("utf-8"),
+                    file_name="variables_no_nulas.csv",
+                    mime="text/csv"
+                )
