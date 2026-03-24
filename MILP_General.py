@@ -1,10 +1,4 @@
-"""
-Constructor de modelos algebraicos
-Versión pulida: código más limpio, sin redundancias, mejor UX.
-"""
-
 import itertools
-import json
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -12,897 +6,1627 @@ import pandas as pd
 import pyomo.environ as pyo
 import streamlit as st
 
-# ─────────────────────────────────────────────
+
+# ============================================================
 # CONFIG
-# ─────────────────────────────────────────────
+# ============================================================
 
-st.set_page_config(page_title="Constructor de modelos algebraicos", layout="wide")
+st.set_page_config(
+    page_title="Constructor de modelos algebraicos",
+    page_icon="📐",
+    layout="wide",
+)
 
-st.markdown("""
-<style>
-    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
-    .stMetric > div { background: #f8f9fa; border-radius: 8px; padding: .5rem; }
-    div[data-testid="stSidebarNav"] { font-size: .9rem; }
-    h2, h3 { margin-top: 1.2rem; }
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🔢 Constructor de modelos algebraicos")
-st.caption("Índices · Parámetros · Variables · Función objetivo · Restricciones · Resolución")
+APP_TITLE = "Constructor de modelos algebraicos"
+APP_SUBTITLE = "Definición estructural, construcción y solución de modelos lineales en Pyomo."
+DOMAIN_OPTIONS = ["Binary", "NonNegativeReals", "NonNegativeIntegers"]
+SOLVER_OPTIONS = ["appsi_highs", "glpk", "cbc"]
 
 
-# ─────────────────────────────────────────────
-# ESTADO INICIAL
-# ─────────────────────────────────────────────
+# ============================================================
+# ESTILO
+# ============================================================
 
-def _init() -> None:
-    if "model_spec" not in st.session_state:
-        st.session_state["model_spec"] = {
+def inject_css() -> None:
+    st.markdown(
+        """
+        <style>
+            .block-container {
+                padding-top: 1.8rem;
+                padding-bottom: 2rem;
+                max-width: 1450px;
+            }
+
+            .main-title {
+                font-size: 2.4rem;
+                font-weight: 800;
+                margin-bottom: 0.2rem;
+                line-height: 1.1;
+            }
+
+            .main-subtitle {
+                font-size: 1rem;
+                color: #9ca3af;
+                margin-bottom: 1.25rem;
+            }
+
+            .section-card {
+                background: linear-gradient(180deg, rgba(18,24,38,0.95), rgba(10,14,24,0.92));
+                border: 1px solid rgba(148,163,184,0.18);
+                border-radius: 18px;
+                padding: 1rem 1rem 0.8rem 1rem;
+                margin-bottom: 1rem;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.16);
+            }
+
+            .soft-card {
+                background: rgba(255,255,255,0.03);
+                border: 1px solid rgba(148,163,184,0.15);
+                border-radius: 14px;
+                padding: 0.85rem 0.9rem;
+                margin-bottom: 0.75rem;
+            }
+
+            .metric-card {
+                background: linear-gradient(180deg, rgba(16,24,40,0.95), rgba(9,13,22,0.92));
+                border: 1px solid rgba(99,102,241,0.18);
+                border-radius: 16px;
+                padding: 1rem;
+                text-align: left;
+                min-height: 110px;
+            }
+
+            .metric-label {
+                color: #9ca3af;
+                font-size: 0.92rem;
+                margin-bottom: 0.35rem;
+            }
+
+            .metric-value {
+                font-size: 1.75rem;
+                font-weight: 750;
+                line-height: 1.15;
+            }
+
+            .pill {
+                display: inline-block;
+                padding: 0.22rem 0.6rem;
+                border-radius: 999px;
+                font-size: 0.8rem;
+                border: 1px solid rgba(148,163,184,0.2);
+                background: rgba(255,255,255,0.04);
+                margin-right: 0.35rem;
+            }
+
+            .small-note {
+                color: #9ca3af;
+                font-size: 0.92rem;
+            }
+
+            div[data-testid="stMetric"] {
+                background: linear-gradient(180deg, rgba(18,24,38,0.95), rgba(9,13,22,0.92));
+                border: 1px solid rgba(148,163,184,0.16);
+                padding: 0.9rem 1rem;
+                border-radius: 16px;
+            }
+
+            section[data-testid="stSidebar"] {
+                border-right: 1px solid rgba(148,163,184,0.12);
+            }
+
+            .watermark {
+                position: fixed;
+                top: 16px;
+                right: 22px;
+                z-index: 9999;
+                color: #ff4b4b;
+                opacity: 0.95;
+                font-weight: 900;
+                font-size: 0.95rem;
+                text-shadow: 1px 1px 2px #000;
+                pointer-events: none;
+            }
+        </style>
+        <div class="watermark">by M.Sc. Dilan Mogollón</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+inject_css()
+
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+def init_session_state() -> None:
+    defaults = {
+        "model_spec": {
             "indices": {},
             "parameters": {},
             "variables": {},
             "objective": None,
             "constraints": [],
             "results": None,
-        }
+        },
+        "solved_model_object": None,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-_init()
+
+init_session_state()
 
 
-# ─────────────────────────────────────────────
+# ============================================================
 # UTILIDADES GENERALES
-# ─────────────────────────────────────────────
+# ============================================================
+
+def info_card(title: str, subtitle: str = "") -> None:
+    st.markdown(
+        f"""
+        <div class="section-card">
+            <div style="font-size:1.1rem;font-weight:700;margin-bottom:0.25rem;">{title}</div>
+            <div class="small-note">{subtitle}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def is_valid_symbol(name: str) -> bool:
-    name = (name or "").strip()
-    if not name or not (name[0].isalpha() or name[0] == "_"):
+    if not isinstance(name, str):
         return False
-    return all(c.isalnum() or c == "_" for c in name[1:])
+    name = name.strip()
+    if not name:
+        return False
+    if not (name[0].isalpha() or name[0] == "_"):
+        return False
+    return all(ch.isalnum() or ch == "_" for ch in name[1:])
 
 
-def build_elements(size: int, prefix: str) -> List[str]:
-    return [f"{prefix}{t}" for t in range(1, size + 1)]
+def sanitize_symbol(name: str) -> str:
+    return name.strip()
 
 
-def cartesian(index_names: List[str], index_specs: Dict) -> List[Tuple]:
-    if not index_names:
-        return [tuple()]
-    return list(itertools.product(*[index_specs[i]["elements"] for i in index_names]))
+def build_index_elements(size: int, prefix: str) -> List[str]:
+    return [f"{prefix}{i}" for i in range(1, size + 1)]
 
 
-def total_elements(index_names: List[str], index_specs: Dict) -> int:
-    n = 1
-    for i in index_names:
-        n *= int(index_specs[i]["size"])
-    return n
-
-
-def pretty_sig(name: str, indices: List[str]) -> str:
-    return name if not indices else f"{name}[{', '.join(indices)}]"
-
-
-# ── Values dict helpers ──
-
-def scalar_set(val: float) -> Dict:   return {"__scalar__": float(val)}
-def scalar_get(d: Dict, default=0.0): return float(d.get("__scalar__", default))
-
-def df_to_values(df: pd.DataFrame, index_names: List[str]) -> Dict:
-    if not index_names:
-        return scalar_set(float(df["value"].iloc[0]))
-    return {str(tuple(str(row[i]) for i in index_names)): float(row["value"]) for _, row in df.iterrows()}
-
-def values_to_df(index_names: List[str], combos: List[Tuple], values: Dict) -> pd.DataFrame:
-    if not index_names:
-        return pd.DataFrame({"value": [scalar_get(values)]})
-    rows = [{**dict(zip(index_names, c)), "value": float(values.get(str(c), 0.0))} for c in combos]
-    return pd.DataFrame(rows)
-
-def values_1d_to_df(labels: List[str], values: Dict) -> pd.DataFrame:
-    return pd.DataFrame([{"label": l, "value": float(values.get(str((l,)), 0.0))} for l in labels])
-
-def df_1d_to_values(df: pd.DataFrame, labels: List[str]) -> Dict:
-    return {str((l,)): float(df.loc[df["label"] == l, "value"].iloc[0]) for l in labels}
-
-def random_values(combos: List[Tuple], low: float, high: float, integer: bool, seed: int) -> Dict:
-    rng = np.random.default_rng(seed)
-    fn  = (lambda: int(rng.integers(int(low), int(high) + 1))) if integer else (lambda: float(rng.uniform(low, high)))
-    return {str(c): float(fn()) for c in combos}
-
-def random_scalar(low: float, high: float, integer: bool, seed: int) -> Dict:
-    rng = np.random.default_rng(seed)
-    val = int(rng.integers(int(low), int(high) + 1)) if integer else float(rng.uniform(low, high))
-    return scalar_set(val)
-
-
-# ─────────────────────────────────────────────
-# UTILIDADES LATEX / TEXTO
-# ─────────────────────────────────────────────
-
-def _num(v: float) -> str:
-    v = float(v)
-    return str(int(v)) if v.is_integer() else f"{v:.2f}"
-
-def factor_to_latex(fac: Dict) -> str:
-    if fac["type"] == "constant":
-        return _num(fac["value"])
-    name, idxs = fac["name"], fac["indices"]
-    return name if not idxs else rf"{name}_{{{','.join(idxs)}}}"
-
-def term_to_latex(term: Dict) -> str:
-    factors = term.get("factors", [])
-    body    = r" \cdot ".join(factor_to_latex(f) for f in factors) if factors else "0"
-    sums    = term.get("sum_over", [])
-    if sums:
-        body = " ".join(rf"\sum_{{{i}}}" for i in sums) + rf"\left({body}\right)"
-    return f"- {body}" if term.get("sign") == "-" else f"+ {body}"
-
-def expr_to_latex(terms: List[Dict]) -> str:
-    if not terms:
-        return "0"
-    raw = " ".join(term_to_latex(t) for t in terms).strip()
-    return raw[2:] if raw.startswith("+ ") else raw
-
-def constraint_to_latex(fam: Dict) -> str:
-    lhs   = expr_to_latex(fam.get("lhs_terms", []))
-    rhs   = expr_to_latex(fam.get("rhs_terms", []))
-    sense = {"<=": r"\leq", ">=": r"\geq", "=": "="}[fam.get("sense", "<=")]
-    fa    = fam.get("forall", [])
-    tail  = (r"\quad \forall " + ", ".join(fa)) if fa else ""
-    return f"{lhs} {sense} {rhs}{tail}"
-
-
-# ─────────────────────────────────────────────
-# LÓGICA DE ÍNDICES EN TÉRMINOS
-# ─────────────────────────────────────────────
-
-def _ordered_unique(seq):
-    seen, out = set(), []
+def ordered_unique(seq: List[str]) -> List[str]:
+    seen = set()
+    out = []
     for x in seq:
         if x not in seen:
-            seen.add(x); out.append(x)
+            seen.add(x)
+            out.append(x)
     return out
 
-def term_used_indices(term: Dict) -> List[str]:
-    return _ordered_unique(i for f in term["factors"] if f["type"] == "object" for i in f["indices"])
 
-def term_free_indices(term: Dict) -> List[str]:
-    return [i for i in term_used_indices(term) if i not in term.get("sum_over", [])]
-
-
-# ─────────────────────────────────────────────
-# VALIDACIONES
-# ─────────────────────────────────────────────
-
-def validate_objective(terms: List[Dict]) -> List[str]:
-    errors = []
-    for i, t in enumerate(terms, 1):
-        free = term_free_indices(t)
-        if free:
-            errors.append(f"Término FO {i} tiene índices libres: {', '.join(free)}. Deben estar cubiertos por sumatorias.")
-    return errors
-
-def validate_constraint(fam: Dict) -> List[str]:
-    errors = []
-    lhs_free = _ordered_unique(i for t in fam.get("lhs_terms", []) for i in term_free_indices(t))
-    rhs_free = _ordered_unique(i for t in fam.get("rhs_terms", []) for i in term_free_indices(t))
-    forall   = fam.get("forall", [])
-
-    if lhs_free and rhs_free:
-        if lhs_free != rhs_free:
-            errors.append(f"Índices libres LHS {lhs_free} ≠ RHS {rhs_free}.")
-        if lhs_free != forall:
-            errors.append(f"Índices libres {lhs_free} ≠ para-todo {forall}.")
-    elif not lhs_free and rhs_free:
-        if rhs_free != forall:
-            errors.append(f"LHS constante; índices libres RHS {rhs_free} deben coincidir con para-todo {forall}.")
-    elif lhs_free and not rhs_free:
-        if lhs_free != forall:
-            errors.append(f"RHS constante; índices libres LHS {lhs_free} deben coincidir con para-todo {forall}.")
-    else:
-        if forall:
-            errors.append(f"Ambos lados constantes; no debería haber para-todo {forall}.")
-    return errors
-
-def validate_linearity(spec: Dict) -> List[str]:
-    errors = []
-    def _check(terms, ctx):
-        for i, t in enumerate(terms, 1):
-            n = sum(1 for f in t.get("factors", []) if f["type"] == "object" and f.get("kind") == "variable")
-            if n > 1:
-                errors.append(f"{ctx} término {i}: {n} factores variables → no lineal.")
-    obj = spec.get("objective")
-    if obj:
-        _check(obj.get("terms", []), "FO")
-    for r, fam in enumerate(spec.get("constraints", []), 1):
-        name = fam.get("name", f"R{r}")
-        _check(fam.get("lhs_terms", []), f"R {name} LHS")
-        _check(fam.get("rhs_terms", []), f"R {name} RHS")
-    return errors
+def total_elements_for_dims(index_names: List[str], index_specs: Dict[str, Dict[str, Any]]) -> int:
+    if not index_names:
+        return 1
+    total = 1
+    for idx in index_names:
+        total *= int(index_specs[idx]["size"])
+    return total
 
 
-# ─────────────────────────────────────────────
-# PYOMO
-# ─────────────────────────────────────────────
+def cartesian_labels(index_names: List[str], index_specs: Dict[str, Dict[str, Any]]) -> List[Tuple[str, ...]]:
+    if not index_names:
+        return [tuple()]
+    arrays = [index_specs[idx]["elements"] for idx in index_names]
+    return list(itertools.product(*arrays))
 
-_DOMAINS = {
-    "Binary":              pyo.Binary,
-    "NonNegativeReals":    pyo.NonNegativeReals,
-    "NonNegativeIntegers": pyo.NonNegativeIntegers,
-}
-_DOMAIN_LABELS = {
-    "Binary": "Binaria",
-    "NonNegativeReals": "Real ≥ 0",
-    "NonNegativeIntegers": "Entera ≥ 0",
-}
 
-def _get_comp(model, fac: Dict, env: Dict):
-    if fac["type"] == "constant":
-        return float(fac["value"])
-    name, idxs, kind = fac["name"], fac["indices"], fac["kind"]
-    comp = getattr(model, f"{'par' if kind == 'parameter' else 'var'}_{name}")
-    if not idxs:
-        return comp
-    key = tuple(env[i] for i in idxs)
-    return comp[key[0]] if len(key) == 1 else comp[key]
+def pretty_signature(name: str, index_names: List[str]) -> str:
+    return name if not index_names else f"{name}[{', '.join(index_names)}]"
 
-def _eval_term(model, term: Dict, env: Dict):
-    val = 1
-    for f in term.get("factors", []):
-        val = val * _get_comp(model, f, env)
-    if not term.get("factors"):
-        val = 0
-    def _sum(pos, local_env):
-        sum_over = term.get("sum_over", [])
-        if pos == len(sum_over):
-            sign = -1 if term.get("sign") == "-" else 1
-            return sign * val if pos == 0 else sign * _base(local_env)
-        idx = sum_over[pos]
-        return sum(_sum(pos + 1, {**local_env, idx: v}) for v in getattr(model, f"set_{idx}"))
-    # rebuild with proper env
-    def _base(local_env):
-        v = 1
-        for f in term.get("factors", []):
-            v = v * _get_comp(model, f, local_env)
-        return v if term.get("factors") else 0
-    def recurse(pos, local_env):
-        so = term.get("sum_over", [])
-        if pos == len(so):
-            raw = _base(local_env)
-            return -raw if term.get("sign") == "-" else raw
-        idx = so[pos]
-        return sum(recurse(pos + 1, {**local_env, idx: v}) for v in getattr(model, f"set_{idx}"))
-    return recurse(0, dict(env))
 
-def _build_expr(model, terms: List[Dict], env: Dict):
-    return sum(_eval_term(model, t, env) for t in terms) if terms else 0
+def infer_domain_text(domain_code: str) -> str:
+    mapper = {
+        "Binary": "Binarias",
+        "NonNegativeReals": "Reales ≥ 0",
+        "NonNegativeIntegers": "Enteras ≥ 0",
+    }
+    return mapper.get(domain_code, domain_code)
 
-def build_pyomo_model(spec: Dict):
-    m = pyo.ConcreteModel()
-    idx_specs = spec["indices"]
 
-    # Sets
-    for name, s in idx_specs.items():
-        setattr(m, f"set_{name}", pyo.Set(initialize=s["elements"], ordered=True))
+def reset_parameters_if_invalid(index_specs: Dict[str, Dict[str, Any]]) -> None:
+    valid_index_names = set(index_specs.keys())
+    cleaned = {}
+    for name, spec in st.session_state["model_spec"]["parameters"].items():
+        if all(idx in valid_index_names for idx in spec.get("indices", [])):
+            cleaned[name] = spec
+    st.session_state["model_spec"]["parameters"] = cleaned
 
-    # Parameters
-    for pname, ps in spec["parameters"].items():
-        idxs, vals = ps["indices"], ps["values"]
-        if not idxs:
-            comp = pyo.Param(initialize=float(vals["__scalar__"]))
-        else:
-            combos = cartesian(idxs, idx_specs)
-            init   = {}
-            for c in combos:
-                k = c[0] if len(c) == 1 else c
-                init[k] = float(vals.get(str(c), 0.0))
-            comp = pyo.Param(*[getattr(m, f"set_{i}") for i in idxs], initialize=init)
-        setattr(m, f"par_{pname}", comp)
 
-    # Variables
-    for vname, vs in spec["variables"].items():
-        idxs   = vs["indices"]
-        domain = _DOMAINS[vs["domain"]]
-        comp   = pyo.Var(domain=domain) if not idxs else pyo.Var(*[getattr(m, f"set_{i}") for i in idxs], domain=domain)
-        setattr(m, f"var_{vname}", comp)
+def reset_variables_if_invalid(index_specs: Dict[str, Dict[str, Any]]) -> None:
+    valid_index_names = set(index_specs.keys())
+    cleaned = {}
+    for name, spec in st.session_state["model_spec"]["variables"].items():
+        if all(idx in valid_index_names for idx in spec.get("indices", [])):
+            cleaned[name] = spec
+    st.session_state["model_spec"]["variables"] = cleaned
 
-    # Objective
-    obj = spec["objective"]
-    obj_expr  = _build_expr(m, obj["terms"], {})
-    obj_sense = pyo.minimize if obj["sense"] == "minimize" else pyo.maximize
-    m.OBJ = pyo.Objective(expr=obj_expr, sense=obj_sense)
 
-    # Constraints
-    for c_idx, fam in enumerate(spec.get("constraints", []), 1):
-        fname  = fam.get("name", f"R{c_idx}")
-        forall = fam.get("forall", [])
-        sense  = fam.get("sense", "<=")
+# ============================================================
+# UTILIDADES DE DATOS
+# ============================================================
 
-        def _expr(m2, lhs_t, rhs_t, env, sense2):
-            lhs = _build_expr(m2, lhs_t, env)
-            rhs = _build_expr(m2, rhs_t, env)
-            return (lhs <= rhs) if sense2 == "<=" else (lhs >= rhs) if sense2 == ">=" else (lhs == rhs)
+def values_dict_from_scalar(value: float) -> Dict[str, float]:
+    return {"__scalar__": float(value)}
 
-        if not forall:
-            setattr(m, f"con_{fname}",
-                    pyo.Constraint(expr=_expr(m, fam["lhs_terms"], fam["rhs_terms"], {}, sense)))
-        else:
-            sets = [getattr(m, f"set_{i}") for i in forall]
-            lhs_t, rhs_t, fa, s = fam["lhs_terms"], fam["rhs_terms"], forall, sense
-            def _rule(m2, *args, _lhs=lhs_t, _rhs=rhs_t, _fa=fa, _s=s):
-                env = dict(zip(_fa, args))
-                return _expr(m2, _lhs, _rhs, env, _s)
-            setattr(m, f"con_{fname}", pyo.Constraint(*sets, rule=_rule))
 
-    return m
+def scalar_from_values_dict(values: Dict[str, float], default: float = 0.0) -> float:
+    return float(values.get("__scalar__", default))
 
-def var_to_df(model, vname: str, vspec: Dict, idx_specs: Dict) -> pd.DataFrame:
-    comp = getattr(model, f"var_{vname}")
-    idxs = vspec["indices"]
-    if not idxs:
-        return pd.DataFrame({"variable": [vname], "value": [pyo.value(comp)]})
+
+def dataframe_1d_from_values_dict(labels: List[str], values_dict: Dict[str, float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "label": labels,
+            "value": [float(values_dict.get(str((lbl,)), 0.0)) for lbl in labels],
+        }
+    )
+
+
+def values_dict_from_dataframe_1d(df: pd.DataFrame, labels: List[str]) -> Dict[str, float]:
+    out = {}
+    for lbl in labels:
+        val = df.loc[df["label"] == lbl, "value"].iloc[0]
+        out[str((lbl,))] = float(val)
+    return out
+
+
+def dataframe_nd_from_values_dict(
+    index_names: List[str],
+    combos: List[Tuple[str, ...]],
+    values_dict: Dict[str, float],
+) -> pd.DataFrame:
     rows = []
-    for c in cartesian(idxs, idx_specs):
-        val = pyo.value(comp[c[0]] if len(c) == 1 else comp[c])
-        rows.append({**dict(zip(idxs, c)), "value": val})
+    for combo in combos:
+        row = {idx: combo[pos] for pos, idx in enumerate(index_names)}
+        row["value"] = float(values_dict.get(str(combo), 0.0))
+        rows.append(row)
     return pd.DataFrame(rows)
 
-def all_vars_df(model, spec: Dict) -> pd.DataFrame:
-    frames = []
-    for vname, vspec in spec["variables"].items():
-        df = var_to_df(model, vname, vspec, spec["indices"])
-        df.insert(0, "variable", vname)
-        frames.append(df)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-def nonzero_df(model, spec: Dict, tol=1e-9) -> pd.DataFrame:
-    df = all_vars_df(model, spec)
-    return df[df["value"].abs() > tol].reset_index(drop=True) if not df.empty else df
+def values_dict_from_dataframe_nd(df: pd.DataFrame, index_names: List[str]) -> Dict[str, float]:
+    out = {}
+    for _, row in df.iterrows():
+        key = tuple(str(row[idx]) for idx in index_names)
+        out[str(key)] = float(row["value"])
+    return out
 
 
-# ─────────────────────────────────────────────
-# CATÁLOGO DE OBJETOS (parámetros + variables)
-# ─────────────────────────────────────────────
+def random_values_dict(
+    combos: List[Tuple[str, ...]],
+    low: float,
+    high: float,
+    integer_mode: bool,
+    seed: int,
+) -> Dict[str, float]:
+    rng = np.random.default_rng(seed)
+    out = {}
+    for combo in combos:
+        if integer_mode:
+            value = int(rng.integers(int(low), int(high) + 1))
+        else:
+            value = float(rng.uniform(low, high))
+        out[str(combo)] = float(value)
+    return out
 
-def object_catalog(spec: Dict) -> List[Dict]:
+
+def random_scalar(low: float, high: float, integer_mode: bool, seed: int) -> Dict[str, float]:
+    rng = np.random.default_rng(seed)
+    value = int(rng.integers(int(low), int(high) + 1)) if integer_mode else float(rng.uniform(low, high))
+    return {"__scalar__": float(value)}
+
+
+# ============================================================
+# CATALOGO DE OBJETOS
+# ============================================================
+
+def object_catalog(model_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
     items = []
-    for name, s in spec["parameters"].items():
-        lbl = pretty_sig(name, s["indices"])
-        items.append({"kind": "parameter", "name": name, "indices": s["indices"], "label": lbl})
-    for name, s in spec["variables"].items():
-        lbl = pretty_sig(name, s["indices"])
-        items.append({"kind": "variable",  "name": name, "indices": s["indices"], "label": lbl})
+    for pname, pspec in model_spec["parameters"].items():
+        items.append(
+            {
+                "kind": "parameter",
+                "name": pname,
+                "indices": pspec["indices"],
+                "label": pretty_signature(pname, pspec["indices"]),
+            }
+        )
+    for vname, vspec in model_spec["variables"].items():
+        items.append(
+            {
+                "kind": "variable",
+                "name": vname,
+                "indices": vspec["indices"],
+                "label": pretty_signature(vname, vspec["indices"]),
+            }
+        )
     return items
 
 
-# ─────────────────────────────────────────────
-# WIDGET REUTILIZABLE: UN FACTOR
-# ─────────────────────────────────────────────
+# ============================================================
+# TEXTO / LATEX
+# ============================================================
 
-def factor_widget(key_prefix: str, catalog: List[Dict], old_factor: Dict | None) -> Dict:
-    """Renderiza los controles de un factor y devuelve el dict del factor."""
-    label_to_item = {o["label"]: o for o in catalog}
-    cat_labels    = [o["label"] for o in catalog]
-
-    old_type = (old_factor or {}).get("type", "object")
-    c1, c2, c3 = st.columns([1.5, 2.5, 2])
-
-    with c1:
-        ftype = st.selectbox(
-            "Tipo",
-            ["object", "constant"],
-            index=0 if old_type == "object" else 1,
-            format_func=lambda x: "Param/Var" if x == "object" else "Constante",
-            key=f"{key_prefix}_type",
-        )
-
-    if ftype == "object":
-        if not cat_labels:
-            st.error("Sin objetos disponibles.")
-            return {"type": "object", "kind": "?", "name": "?", "indices": [], "label": "?"}
-        default_lbl = cat_labels[0]
-        if old_factor and old_factor.get("type") == "object":
-            lbl = old_factor.get("label", default_lbl)
-            if lbl in cat_labels:
-                default_lbl = lbl
-        with c2:
-            chosen = st.selectbox("Objeto", cat_labels, index=cat_labels.index(default_lbl), key=f"{key_prefix}_obj")
-        item = label_to_item[chosen]
-        with c3:
-            st.caption(f"Índices: {', '.join(item['indices']) or 'ninguno'}")
-        return {"type": "object", "kind": item["kind"], "name": item["name"],
-                "indices": item["indices"], "label": item["label"]}
-    else:
-        default_val = float((old_factor or {}).get("value", 1.0))
-        with c2:
-            val = st.number_input("Valor", value=default_val, key=f"{key_prefix}_const")
-        return {"type": "constant", "value": float(val)}
+def format_number_latex(val: float) -> str:
+    val = float(val)
+    return str(int(val)) if val.is_integer() else f"{val:.4f}"
 
 
-# ─────────────────────────────────────────────
-# WIDGET REUTILIZABLE: UN TÉRMINO
-# ─────────────────────────────────────────────
+def factor_to_text(factor: Dict[str, Any]) -> str:
+    if factor["type"] == "object":
+        return factor["label"]
+    return str(factor["value"])
 
-def term_widget(key_prefix: str, catalog: List[Dict], index_names: List[str],
-                old_term: Dict | None, show_preview=True) -> Dict:
-    """Renderiza los controles de un término y devuelve el dict del término."""
-    old = old_term or {}
-    c1, c2, c3 = st.columns([1, 2, 2])
 
-    with c1:
-        sign = st.selectbox("Signo", ["+", "-"],
-                            index=0 if old.get("sign", "+") == "+" else 1,
-                            key=f"{key_prefix}_sign")
-    with c2:
-        n_factors = st.number_input("Factores", min_value=1, max_value=4,
-                                    value=max(1, len(old.get("factors", []))),
-                                    step=1, key=f"{key_prefix}_nfac")
-    with c3:
-        sum_over = st.multiselect("Sumar sobre", index_names,
-                                  default=[i for i in old.get("sum_over", []) if i in index_names],
-                                  key=f"{key_prefix}_sum")
+def factor_to_latex(factor: Dict[str, Any]) -> str:
+    if factor["type"] == "constant":
+        return format_number_latex(factor["value"])
+    name = factor["name"]
+    idxs = factor["indices"]
+    return name if not idxs else rf"{name}_{{{','.join(idxs)}}}"
 
-    factors = []
-    for fi in range(int(n_factors)):
-        old_fac = old.get("factors", [])[fi] if fi < len(old.get("factors", [])) else None
-        factors.append(factor_widget(f"{key_prefix}_f{fi}", catalog, old_fac))
 
-    term = {"sign": sign, "factors": factors, "sum_over": sum_over}
+def term_used_indices(term: Dict[str, Any]) -> List[str]:
+    idxs = []
+    for fac in term["factors"]:
+        if fac["type"] == "object":
+            idxs.extend(fac["indices"])
+    return ordered_unique(idxs)
 
-    if show_preview:
-        st.latex(term_to_latex(term))
+
+def term_free_indices(term: Dict[str, Any]) -> List[str]:
+    used = term_used_indices(term)
+    summed = term.get("sum_over", [])
+    return [idx for idx in used if idx not in summed]
+
+
+def build_term_text(term: Dict[str, Any]) -> str:
+    factors_txt = " * ".join(factor_to_text(f) for f in term["factors"]) if term["factors"] else "0"
+    if term.get("sum_over"):
+        sums = " ".join([f"Σ_{{{idx}}}" for idx in term["sum_over"]])
+        factors_txt = f"{sums} ({factors_txt})"
+    sign = "- " if term.get("sign", "+") == "-" else "+ "
+    return f"{sign}{factors_txt}"
+
+
+def build_expression_text(terms: List[Dict[str, Any]]) -> str:
+    if not terms:
+        return "0"
+    txt = " ".join(build_term_text(t) for t in terms).strip()
+    return txt[2:] if txt.startswith("+ ") else txt
+
+
+def build_term_latex(term: Dict[str, Any]) -> str:
+    factors = term.get("factors", [])
+    body = r" \cdot ".join(factor_to_latex(f) for f in factors) if factors else "0"
+    if term.get("sum_over"):
+        sums = " ".join([rf"\sum_{{{idx}}}" for idx in term["sum_over"]])
+        body = f"{sums}\\left({body}\\right)"
+    sign = "- " if term.get("sign", "+") == "-" else "+ "
+    return f"{sign}{body}"
+
+
+def build_expression_latex(terms: List[Dict[str, Any]]) -> str:
+    if not terms:
+        return "0"
+    expr = " ".join(build_term_latex(t) for t in terms).strip()
+    return expr[2:] if expr.startswith("+ ") else expr
+
+
+def build_constraint_family_latex(family: Dict[str, Any]) -> str:
+    lhs = build_expression_latex(family.get("lhs_terms", []))
+    rhs = build_expression_latex(family.get("rhs_terms", []))
+    sense_map = {"<=": r"\leq", ">=": r"\geq", "=": "="}
+    out = f"{lhs} {sense_map[family['sense']]} {rhs}"
+    if family.get("forall"):
+        out += r"\quad \forall " + ", ".join(family["forall"])
+    return out
+
+
+# ============================================================
+# VALIDACIÓN
+# ============================================================
+
+def validate_objective_terms(terms: List[Dict[str, Any]]) -> List[str]:
+    errors = []
+    for pos, term in enumerate(terms, start=1):
         free = term_free_indices(term)
         if free:
-            st.warning(f"Índices libres: {', '.join(free)}")
+            errors.append(
+                f"En el término {pos} de la función objetivo quedaron índices libres: {', '.join(free)}."
+            )
+    return errors
+
+
+def validate_constraint_family(family: Dict[str, Any]) -> List[str]:
+    errors = []
+    lhs_free = ordered_unique([idx for t in family.get("lhs_terms", []) for idx in term_free_indices(t)])
+    rhs_free = ordered_unique([idx for t in family.get("rhs_terms", []) for idx in term_free_indices(t)])
+    forall = family.get("forall", [])
+
+    lhs_is_constant = len(lhs_free) == 0
+    rhs_is_constant = len(rhs_free) == 0
+
+    if not lhs_is_constant and not rhs_is_constant:
+        if lhs_free != rhs_free:
+            errors.append(
+                f"Los índices libres del lado izquierdo ({lhs_free}) no coinciden con los del lado derecho ({rhs_free})."
+            )
+        if lhs_free != forall:
+            errors.append(
+                f"Los índices libres de la restricción ({lhs_free}) no coinciden con el 'para todo' ({forall})."
+            )
+    elif lhs_is_constant and not rhs_is_constant:
+        if rhs_free != forall:
+            errors.append(
+                f"El lado izquierdo es constante; los índices libres del lado derecho ({rhs_free}) deben coincidir con el 'para todo' ({forall})."
+            )
+    elif not lhs_is_constant and rhs_is_constant:
+        if lhs_free != forall:
+            errors.append(
+                f"El lado derecho es constante; los índices libres del lado izquierdo ({lhs_free}) deben coincidir con el 'para todo' ({forall})."
+            )
+    else:
+        if forall:
+            errors.append(
+                f"Ambos lados son constantes, por lo que no debería existir 'para todo' ({forall})."
+            )
+
+    return errors
+
+
+def count_variable_factors(term: Dict[str, Any]) -> int:
+    return sum(
+        1
+        for fac in term.get("factors", [])
+        if fac["type"] == "object" and fac.get("kind") == "variable"
+    )
+
+
+def validate_linearity_of_term(term: Dict[str, Any], context: str = "") -> List[str]:
+    n = count_variable_factors(term)
+    if n > 1:
+        return [f"{context} tiene {n} factores variables en un mismo término. Eso genera no linealidad."]
+    return []
+
+
+def validate_linearity_of_model(spec: Dict[str, Any]) -> List[str]:
+    errors = []
+    obj = spec.get("objective")
+    if obj is not None:
+        for i, term in enumerate(obj.get("terms", []), start=1):
+            errors.extend(validate_linearity_of_term(term, f"FO término {i}"))
+    for r, fam in enumerate(spec.get("constraints", []), start=1):
+        rname = fam.get("name", f"R{r}")
+        for i, term in enumerate(fam.get("lhs_terms", []), start=1):
+            errors.extend(validate_linearity_of_term(term, f"Restricción {rname}, LHS término {i}"))
+        for i, term in enumerate(fam.get("rhs_terms", []), start=1):
+            errors.extend(validate_linearity_of_term(term, f"Restricción {rname}, RHS término {i}"))
+    return errors
+
+
+# ============================================================
+# PYOMO
+# ============================================================
+
+def pyomo_domain_from_code(domain_code: str):
+    domain_map = {
+        "Binary": pyo.Binary,
+        "NonNegativeReals": pyo.NonNegativeReals,
+        "NonNegativeIntegers": pyo.NonNegativeIntegers,
+    }
+    if domain_code not in domain_map:
+        raise ValueError(f"Dominio no soportado: {domain_code}")
+    return domain_map[domain_code]
+
+
+def get_component_value(model, factor: Dict[str, Any], env: Dict[str, Any]):
+    if factor["type"] == "constant":
+        return float(factor["value"])
+
+    name = factor["name"]
+    idxs = factor["indices"]
+    kind = factor["kind"]
+
+    comp = getattr(model, f"par_{name}") if kind == "parameter" else getattr(model, f"var_{name}")
+
+    if not idxs:
+        return comp
+
+    key = tuple(env[idx] for idx in idxs)
+    return comp[key[0]] if len(key) == 1 else comp[key]
+
+
+def build_base_term_value(model, term: Dict[str, Any], env: Dict[str, Any]):
+    factors = term.get("factors", [])
+    val = 0.0 if not factors else 1
+    for fac in factors:
+        val *= get_component_value(model, fac, env)
+    if term.get("sign", "+") == "-":
+        val = -val
+    return val
+
+
+def evaluate_term_with_sums(model, term: Dict[str, Any], env: Dict[str, Any]):
+    sum_over = term.get("sum_over", [])
+
+    def recurse(pos: int, local_env: Dict[str, Any]):
+        if pos == len(sum_over):
+            return build_base_term_value(model, term, local_env)
+        idx_name = sum_over[pos]
+        pyomo_set = getattr(model, f"set_{idx_name}")
+        return sum(recurse(pos + 1, {**local_env, idx_name: idx_val}) for idx_val in pyomo_set)
+
+    return recurse(0, dict(env))
+
+
+def build_expression_pyomo(model, terms: List[Dict[str, Any]], env: Dict[str, Any]):
+    return sum(evaluate_term_with_sums(model, term, env) for term in terms) if terms else 0
+
+
+def build_pyomo_model_from_spec(spec: Dict[str, Any]):
+    model = pyo.ConcreteModel()
+    index_specs = spec["indices"]
+
+    # Sets
+    for idx_name, idx_spec in index_specs.items():
+        setattr(model, f"set_{idx_name}", pyo.Set(initialize=idx_spec["elements"], ordered=True))
+
+    # Params
+    for pname, pspec in spec["parameters"].items():
+        idxs = pspec["indices"]
+        values = pspec["values"]
+
+        if not idxs:
+            comp = pyo.Param(initialize=float(values["__scalar__"]), mutable=False)
         else:
-            st.success("Sin índices libres ✓")
+            pyomo_sets = [getattr(model, f"set_{idx}") for idx in idxs]
+            init_dict = {}
+            for combo in cartesian_labels(idxs, index_specs):
+                val = float(values.get(str(combo), 0.0))
+                init_dict[combo[0] if len(combo) == 1 else combo] = val
+            comp = pyo.Param(*pyomo_sets, initialize=init_dict, mutable=False)
+
+        setattr(model, f"par_{pname}", comp)
+
+    # Vars
+    for vname, vspec in spec["variables"].items():
+        idxs = vspec["indices"]
+        domain = pyomo_domain_from_code(vspec["domain"])
+        if not idxs:
+            comp = pyo.Var(domain=domain)
+        else:
+            pyomo_sets = [getattr(model, f"set_{idx}") for idx in idxs]
+            comp = pyo.Var(*pyomo_sets, domain=domain)
+        setattr(model, f"var_{vname}", comp)
+
+    # Objective
+    obj = spec.get("objective")
+    if obj is None:
+        raise ValueError("No hay función objetivo definida.")
+
+    obj_expr = build_expression_pyomo(model, obj["terms"], env={})
+    obj_sense = pyo.minimize if obj["sense"] == "minimize" else pyo.maximize
+    model.OBJ = pyo.Objective(expr=obj_expr, sense=obj_sense)
+
+    # Constraints
+    for c_idx, fam in enumerate(spec.get("constraints", []), start=1):
+        fname = fam.get("name", f"R{c_idx}")
+        lhs_terms = fam.get("lhs_terms", [])
+        rhs_terms = fam.get("rhs_terms", [])
+        forall = fam.get("forall", [])
+        sense_f = fam.get("sense", "<=")
+
+        if not forall:
+            lhs_expr = build_expression_pyomo(model, lhs_terms, env={})
+            rhs_expr = build_expression_pyomo(model, rhs_terms, env={})
+            if sense_f == "<=":
+                con = pyo.Constraint(expr=lhs_expr <= rhs_expr)
+            elif sense_f == ">=":
+                con = pyo.Constraint(expr=lhs_expr >= rhs_expr)
+            else:
+                con = pyo.Constraint(expr=lhs_expr == rhs_expr)
+        else:
+            pyomo_sets = [getattr(model, f"set_{idx}") for idx in forall]
+
+            def make_rule(lhs_terms_local, rhs_terms_local, forall_local, sense_local):
+                def _rule(m, *args):
+                    env = dict(zip(forall_local, args))
+                    lhs_expr = build_expression_pyomo(m, lhs_terms_local, env)
+                    rhs_expr = build_expression_pyomo(m, rhs_terms_local, env)
+                    if sense_local == "<=":
+                        return lhs_expr <= rhs_expr
+                    elif sense_local == ">=":
+                        return lhs_expr >= rhs_expr
+                    return lhs_expr == rhs_expr
+                return _rule
+
+            con = pyo.Constraint(*pyomo_sets, rule=make_rule(lhs_terms, rhs_terms, forall, sense_f))
+
+        setattr(model, f"con_{fname}", con)
+
+    return model
+
+
+def solver_factory_from_name(solver_name: str):
+    if solver_name == "appsi_highs":
+        return pyo.SolverFactory("appsi_highs")
+    if solver_name == "glpk":
+        return pyo.SolverFactory("glpk")
+    if solver_name == "cbc":
+        return pyo.SolverFactory("cbc")
+    raise ValueError(f"Solver no soportado: {solver_name}")
+
+
+def variable_solution_to_dataframe(
+    model,
+    vname: str,
+    vspec: Dict[str, Any],
+    index_specs: Dict[str, Dict[str, Any]],
+) -> pd.DataFrame:
+    comp = getattr(model, f"var_{vname}")
+    idxs = vspec["indices"]
+
+    if not idxs:
+        return pd.DataFrame({"variable": [vname], "value": [pyo.value(comp)]})
+
+    rows = []
+    for combo in cartesian_labels(idxs, index_specs):
+        value = pyo.value(comp[combo[0]]) if len(combo) == 1 else pyo.value(comp[combo])
+        row = {idx: combo[pos] for pos, idx in enumerate(idxs)}
+        row["value"] = value
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def all_variables_solution_flat(model, spec: Dict[str, Any]) -> pd.DataFrame:
+    pieces = []
+    for vname, vspec in spec["variables"].items():
+        df = variable_solution_to_dataframe(model, vname, vspec, spec["indices"])
+        df.insert(0, "variable_name", vname)
+        pieces.append(df)
+    return pd.concat(pieces, ignore_index=True) if pieces else pd.DataFrame()
+
+
+def nonzero_variables_solution_flat(model, spec: Dict[str, Any], tol: float = 1e-9) -> pd.DataFrame:
+    df = all_variables_solution_flat(model, spec)
+    return df[df["value"].abs() > tol].reset_index(drop=True) if not df.empty else df
+
+
+# ============================================================
+# RENDER HELPERS
+# ============================================================
+
+def render_header() -> None:
+    st.markdown(f'<div class="main-title">{APP_TITLE}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="main-subtitle">{APP_SUBTITLE}</div>', unsafe_allow_html=True)
+
+
+def render_spec_summary(spec: Dict[str, Any]) -> None:
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Índices", len(spec["indices"]))
+    with c2:
+        st.metric("Parámetros", len(spec["parameters"]))
+    with c3:
+        st.metric("Variables", len(spec["variables"]))
+
+
+def render_factor_builder(
+    prefix: str,
+    term_idx: int,
+    factor_idx: int,
+    catalog_labels: List[str],
+    label_to_item: Dict[str, Dict[str, Any]],
+    old_factor: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    default_type = "object" if old_factor is None else old_factor.get("type", "object")
+    c1, c2, c3 = st.columns([1.25, 2.4, 2.1])
+
+    with c1:
+        factor_type = st.selectbox(
+            f"Tipo factor {factor_idx + 1}",
+            options=["object", "constant"],
+            index=0 if default_type == "object" else 1,
+            format_func=lambda x: "Parámetro/Variable" if x == "object" else "Constante",
+            key=f"{prefix}_factor_type_{term_idx}_{factor_idx}",
+        )
+
+    if factor_type == "object":
+        if not catalog_labels:
+            st.error("No hay parámetros ni variables disponibles.")
+            return {"type": "constant", "value": 0.0}
+
+        default_label = catalog_labels[0]
+        if old_factor is not None and old_factor.get("type") == "object":
+            old_label = old_factor.get("label", default_label)
+            if old_label in catalog_labels:
+                default_label = old_label
+
+        with c2:
+            chosen_label = st.selectbox(
+                f"Objeto factor {factor_idx + 1}",
+                options=catalog_labels,
+                index=catalog_labels.index(default_label),
+                key=f"{prefix}_factor_object_{term_idx}_{factor_idx}",
+            )
+
+        item = label_to_item[chosen_label]
+        with c3:
+            st.caption(f"Índices: {', '.join(item['indices']) if item['indices'] else 'ninguno'}")
+
+        return {
+            "type": "object",
+            "kind": item["kind"],
+            "name": item["name"],
+            "indices": item["indices"],
+            "label": item["label"],
+        }
+
+    default_value = 1.0 if old_factor is None else float(old_factor.get("value", 1.0))
+    with c2:
+        const_val = st.number_input(
+            f"Valor factor {factor_idx + 1}",
+            value=default_value,
+            key=f"{prefix}_factor_const_{term_idx}_{factor_idx}",
+        )
+
+    return {"type": "constant", "value": float(const_val)}
+
+
+def render_term_builder(
+    title: str,
+    prefix: str,
+    term_idx: int,
+    index_options: List[str],
+    catalog_labels: List[str],
+    label_to_item: Dict[str, Dict[str, Any]],
+    old_term: Dict[str, Any] | None = None,
+    default_num_factors: int = 2,
+) -> Dict[str, Any]:
+    st.markdown(f"**{title}**")
+    c1, c2, c3 = st.columns([1, 1.4, 2.2])
+
+    with c1:
+        sign = st.selectbox(
+            "Signo",
+            options=["+", "-"],
+            index=0 if old_term is None or old_term.get("sign", "+") == "+" else 1,
+            key=f"{prefix}_sign_{term_idx}",
+        )
+
+    with c2:
+        num_factors = st.number_input(
+            "Número de factores",
+            min_value=1,
+            max_value=4,
+            value=default_num_factors if old_term is None else max(1, len(old_term.get("factors", []))),
+            step=1,
+            key=f"{prefix}_num_factors_{term_idx}",
+        )
+
+    with c3:
+        sum_over = st.multiselect(
+            "Sumar sobre",
+            options=index_options,
+            default=[] if old_term is None else old_term.get("sum_over", []),
+            key=f"{prefix}_sum_over_{term_idx}",
+        )
+
+    factors = []
+    old_factors = [] if old_term is None else old_term.get("factors", [])
+    for f in range(int(num_factors)):
+        with st.container(border=True):
+            factor = render_factor_builder(
+                prefix=prefix,
+                term_idx=term_idx,
+                factor_idx=f,
+                catalog_labels=catalog_labels,
+                label_to_item=label_to_item,
+                old_factor=old_factors[f] if f < len(old_factors) else None,
+            )
+            factors.append(factor)
+
+    term = {"sign": sign, "factors": factors, "sum_over": sum_over}
+    st.latex(build_term_latex(term))
+
+    free = term_free_indices(term)
+    if free:
+        st.warning(f"Índices libres: {', '.join(free)}")
+    else:
+        st.success("Sin índices libres.")
 
     return term
 
 
-# ─────────────────────────────────────────────
-# WIDGET REUTILIZABLE: PARÁMETROS ALEATORIOS
-# ─────────────────────────────────────────────
+def render_parameter_editor(
+    pname: str,
+    p_indices: List[str],
+    existing_values: Dict[str, float],
+    index_specs: Dict[str, Dict[str, Any]],
+    mode: str,
+    ui_key: str,
+) -> Dict[str, float]:
+    num_elems = total_elements_for_dims(p_indices, index_specs)
 
-def random_controls(key_prefix: str) -> Tuple[float, float, bool, int]:
+    if not p_indices:
+        if mode == "Manual":
+            value = st.number_input(
+                f"Valor de {pname}",
+                value=scalar_from_values_dict(existing_values, 0.0),
+                key=f"{ui_key}_scalar_manual",
+            )
+            return values_dict_from_scalar(value)
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            low = st.number_input("Mínimo", value=0.0, key=f"{ui_key}_low")
+        with c2:
+            high = st.number_input("Máximo", value=10.0, key=f"{ui_key}_high")
+        with c3:
+            integer_mode = st.checkbox("Entero", value=False, key=f"{ui_key}_integer")
+        with c4:
+            seed = st.number_input("Semilla", value=123, step=1, key=f"{ui_key}_seed")
+
+        if low > high:
+            st.error("El mínimo no puede ser mayor que el máximo.")
+            return existing_values or values_dict_from_scalar(0.0)
+
+        if st.button(f"Generar {pname}", key=f"{ui_key}_generate"):
+            st.session_state[f"{ui_key}_generated"] = random_scalar(low, high, integer_mode, int(seed))
+
+        generated = st.session_state.get(
+            f"{ui_key}_generated",
+            existing_values if existing_values else random_scalar(low, high, integer_mode, int(seed)),
+        )
+        st.write(f"Valor generado: **{scalar_from_values_dict(generated):.4f}**")
+        return generated
+
+    if len(p_indices) == 1:
+        labels = index_specs[p_indices[0]]["elements"]
+        if mode == "Manual":
+            df0 = dataframe_1d_from_values_dict(labels, existing_values)
+            edited = st.data_editor(
+                df0,
+                use_container_width=True,
+                hide_index=True,
+                disabled=["label"],
+                num_rows="fixed",
+                key=f"{ui_key}_manual_1d",
+            )
+            return values_dict_from_dataframe_1d(edited, labels)
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            low = st.number_input("Mínimo", value=0.0, key=f"{ui_key}_low")
+        with c2:
+            high = st.number_input("Máximo", value=10.0, key=f"{ui_key}_high")
+        with c3:
+            integer_mode = st.checkbox("Entero", value=False, key=f"{ui_key}_integer")
+        with c4:
+            seed = st.number_input("Semilla", value=123, step=1, key=f"{ui_key}_seed")
+
+        if low > high:
+            st.error("El mínimo no puede ser mayor que el máximo.")
+            return existing_values or {}
+
+        combos = cartesian_labels(p_indices, index_specs)
+        if st.button(f"Generar valores de {pname}", key=f"{ui_key}_generate"):
+            st.session_state[f"{ui_key}_generated"] = random_values_dict(combos, low, high, integer_mode, int(seed))
+
+        generated = st.session_state.get(
+            f"{ui_key}_generated",
+            existing_values if existing_values else random_values_dict(combos, low, high, integer_mode, int(seed)),
+        )
+        st.dataframe(dataframe_1d_from_values_dict(labels, generated), use_container_width=True, hide_index=True)
+        return generated
+
+    combos = cartesian_labels(p_indices, index_specs)
+    if mode == "Manual":
+        df0 = dataframe_nd_from_values_dict(p_indices, combos, existing_values)
+        edited = st.data_editor(
+            df0,
+            use_container_width=True,
+            hide_index=True,
+            disabled=p_indices,
+            num_rows="fixed",
+            key=f"{ui_key}_manual_nd",
+        )
+        return values_dict_from_dataframe_nd(edited, p_indices)
+
     c1, c2, c3, c4 = st.columns(4)
-    with c1: low  = st.number_input("Mínimo",  value=0.0,  key=f"{key_prefix}_low")
-    with c2: high = st.number_input("Máximo",  value=10.0, key=f"{key_prefix}_high")
-    with c3: intm = st.checkbox("Entero",      value=False, key=f"{key_prefix}_int")
-    with c4: seed = st.number_input("Semilla", value=123,  step=1, key=f"{key_prefix}_seed")
-    return low, high, intm, int(seed)
+    with c1:
+        low = st.number_input("Mínimo", value=0.0, key=f"{ui_key}_low")
+    with c2:
+        high = st.number_input("Máximo", value=10.0, key=f"{ui_key}_high")
+    with c3:
+        integer_mode = st.checkbox("Entero", value=False, key=f"{ui_key}_integer")
+    with c4:
+        seed = st.number_input("Semilla", value=123, step=1, key=f"{ui_key}_seed")
+
+    if low > high:
+        st.error("El mínimo no puede ser mayor que el máximo.")
+        return existing_values or {}
+
+    if st.button(f"Generar valores de {pname}", key=f"{ui_key}_generate"):
+        st.session_state[f"{ui_key}_generated"] = random_values_dict(combos, low, high, integer_mode, int(seed))
+
+    generated = st.session_state.get(
+        f"{ui_key}_generated",
+        existing_values if existing_values else random_values_dict(combos, low, high, integer_mode, int(seed)),
+    )
+    st.dataframe(dataframe_nd_from_values_dict(p_indices, combos, generated), use_container_width=True, hide_index=True)
+    return generated
 
 
-# ─────────────────────────────────────────────
-# BARRA LATERAL
-# ─────────────────────────────────────────────
+# ============================================================
+# SIDEBAR
+# ============================================================
 
-st.sidebar.title("Navegación")
-section = st.sidebar.radio("Ir a:", [
-    "📥 Ingreso de información",
-    "📐 Definición del modelo",
-    "📊 Salidas del modelo",
-], index=0)
+render_header()
 
 spec = st.session_state["model_spec"]
+
+st.sidebar.markdown("## Navegación")
+section = st.sidebar.radio(
+    "Ir a:",
+    ["Ingreso de información", "Definición del modelo", "Resolver modelo"],
+    index=0,
+)
+
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Estado actual**")
-cols = st.sidebar.columns(3)
-cols[0].metric("Índices",     len(spec["indices"]))
-cols[1].metric("Parámetros",  len(spec["parameters"]))
-cols[2].metric("Variables",   len(spec["variables"]))
-if spec["objective"]:
-    st.sidebar.markdown(f"✅ Función objetivo definida")
-if spec["constraints"]:
-    st.sidebar.markdown(f"✅ {len(spec['constraints'])} familia(s) de restricciones")
+st.sidebar.markdown("### Estado actual")
+st.sidebar.markdown(f'<span class="pill">Índices: {len(spec["indices"])}</span>', unsafe_allow_html=True)
+st.sidebar.markdown(f'<span class="pill">Parámetros: {len(spec["parameters"])}</span>', unsafe_allow_html=True)
+st.sidebar.markdown(f'<span class="pill">Variables: {len(spec["variables"])}</span>', unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════════════════════
-# SECCIÓN 1: INGRESO DE INFORMACIÓN
-# ═══════════════════════════════════════════════════════
+# ============================================================
+# 1. INGRESO DE INFORMACIÓN
+# ============================================================
 
-if section == "📥 Ingreso de información":
-    st.header("Ingreso de información")
+if section == "Ingreso de información":
+    info_card("1. Ingreso de información", "Define índices, parámetros y variables del modelo.")
+    render_spec_summary(spec)
 
-    # ── ÍNDICES ──────────────────────────────────────────
-    st.subheader("1. Índices")
-    st.caption("Define los conjuntos de índices del modelo, p. ej. `i`, `j`, `t`.")
+    # --------------------------------------------------------
+    # Índices
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("1. Índices")
 
-    num_idx = st.number_input("Número de índices", min_value=1, max_value=10,
-                               value=max(1, len(spec["indices"]) or 3), step=1, key="num_indices")
+        current_indices = spec["indices"]
+        num_indices = st.number_input(
+            "Número de índices",
+            min_value=1,
+            max_value=10,
+            value=max(1, len(current_indices) if current_indices else 3),
+            step=1,
+        )
 
-    idx_rows, used_names, idx_errors = [], set(), []
-    existing_idx_names = list(spec["indices"].keys())
+        index_rows = []
+        used_names = set()
+        index_errors = []
 
-    for r in range(int(num_idx)):
-        default_name = existing_idx_names[r] if r < len(existing_idx_names) else f"idx_{r+1}"
-        default_size = spec["indices"].get(default_name, {}).get("size", 3)
-        c1, c2 = st.columns([2, 2])
-        with c1:
-            name = st.text_input(f"Nombre índice {r+1}", value=default_name, key=f"idx_name_{r}").strip()
-        with c2:
-            size = st.number_input(f"Tamaño de {name or f'índice {r+1}'}", min_value=1, max_value=1000,
-                                    value=int(default_size), step=1, key=f"idx_size_{r}")
-        if not is_valid_symbol(name):
-            idx_errors.append(f"`{name}` no es un nombre válido.")
-        elif name in used_names:
-            idx_errors.append(f"Índice `{name}` duplicado.")
+        existing_names = list(current_indices.keys())
+
+        for r in range(int(num_indices)):
+            col1, col2 = st.columns([2, 2])
+            default_name = existing_names[r] if r < len(existing_names) else f"idx_{r+1}"
+
+            with col1:
+                idx_name = st.text_input(
+                    f"Nombre del índice {r+1}",
+                    value=default_name,
+                    key=f"index_name_{r}",
+                ).strip()
+
+            with col2:
+                existing_size = current_indices[default_name]["size"] if default_name in current_indices else 3
+                idx_size = st.number_input(
+                    f"Tamaño de {idx_name or f'índice {r+1}'}",
+                    min_value=1,
+                    max_value=1000,
+                    value=int(existing_size),
+                    step=1,
+                    key=f"index_size_{r}",
+                )
+
+            if not is_valid_symbol(idx_name):
+                index_errors.append(f"El nombre `{idx_name}` no es válido.")
+            elif idx_name in used_names:
+                index_errors.append(f"El índice `{idx_name}` está repetido.")
+            else:
+                used_names.add(idx_name)
+                index_rows.append(
+                    {
+                        "name": sanitize_symbol(idx_name),
+                        "size": int(idx_size),
+                        "elements": build_index_elements(int(idx_size), sanitize_symbol(idx_name)),
+                    }
+                )
+
+        for err in index_errors:
+            st.error(err)
+
+        valid_indices = len(index_errors) == 0
+        index_specs = {}
+
+        if valid_indices:
+            for row in index_rows:
+                index_specs[row["name"]] = {"size": row["size"], "elements": row["elements"]}
+            st.session_state["model_spec"]["indices"] = index_specs
+            reset_parameters_if_invalid(index_specs)
+            reset_variables_if_invalid(index_specs)
+            spec = st.session_state["model_spec"]
+
+        if valid_indices and index_specs:
+            preview = pd.DataFrame(
+                [
+                    {
+                        "Índice": idx_name,
+                        "Tamaño": idx_spec["size"],
+                        "Elementos": ", ".join(idx_spec["elements"]),
+                    }
+                    for idx_name, idx_spec in index_specs.items()
+                ]
+            )
+            st.dataframe(preview, use_container_width=True, hide_index=True)
+
+    # --------------------------------------------------------
+    # Parámetros
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("2. Parámetros")
+
+        if not spec["indices"]:
+            st.info("Primero define índices válidos.")
         else:
-            used_names.add(name)
-            idx_rows.append({"name": name, "size": int(size), "elements": build_elements(int(size), name)})
+            current_params = spec["parameters"]
+            num_params = st.number_input(
+                "Número de parámetros",
+                min_value=0,
+                max_value=30,
+                value=max(1, len(current_params)) if current_params else 1,
+                step=1,
+            )
 
-    for e in idx_errors:
-        st.error(e)
-    valid_idx = not idx_errors
+            new_params = {}
+            index_name_options = list(spec["indices"].keys())
+            existing_param_names = list(current_params.keys())
 
-    if valid_idx:
-        index_specs = {r["name"]: {"size": r["size"], "elements": r["elements"]} for r in idx_rows}
-        spec["indices"] = index_specs
-        # Limpiar parámetros/variables que referencien índices eliminados
-        valid_set = set(index_specs)
-        spec["parameters"] = {k: v for k, v in spec["parameters"].items()
-                               if all(i in valid_set for i in v.get("indices", []))}
-        spec["variables"]  = {k: v for k, v in spec["variables"].items()
-                               if all(i in valid_set for i in v.get("indices", []))}
-        # Preview
-        preview = [{"Índice": n, "Tamaño": s["size"], "Elementos": ", ".join(s["elements"])}
-                   for n, s in index_specs.items()]
-        st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
-    else:
-        index_specs = spec.get("indices", {})
+            for p in range(int(num_params)):
+                with st.expander(f"Parámetro {p+1}", expanded=(p == 0)):
+                    old_name = existing_param_names[p] if p < len(existing_param_names) else f"param_{p+1}"
 
-    # ── PARÁMETROS ───────────────────────────────────────
-    st.markdown("---")
-    st.subheader("2. Parámetros")
+                    c1, c2 = st.columns([2, 3])
+                    with c1:
+                        pname = st.text_input(
+                            f"Nombre del parámetro {p+1}",
+                            value=old_name,
+                            key=f"param_name_{p}",
+                        ).strip()
 
-    if not valid_idx or not index_specs:
-        st.info("Primero define índices válidos.")
-    else:
-        idx_options = list(index_specs.keys())
-        cur_params  = spec["parameters"]
-        num_params  = st.number_input("Número de parámetros", min_value=0, max_value=30,
-                                       value=max(1, len(cur_params)), step=1, key="num_params")
-        new_params  = {}
-        cur_names   = list(cur_params.keys())
+                    with c2:
+                        default_indices = current_params.get(old_name, {}).get("indices", [])
+                        p_indices = st.multiselect(
+                            f"Índices de {pname or f'parámetro {p+1}'}",
+                            options=index_name_options,
+                            default=default_indices,
+                            key=f"param_indices_{p}",
+                        )
 
-        for p in range(int(num_params)):
-            with st.expander(f"Parámetro {p+1}", expanded=p == 0):
-                old_name = cur_names[p] if p < len(cur_names) else f"param_{p+1}"
-                old_spec = cur_params.get(old_name, {})
-                c1, c2   = st.columns([2, 3])
-                with c1:
-                    pname = st.text_input("Nombre", value=old_name, key=f"p_name_{p}").strip()
-                with c2:
-                    p_idx = st.multiselect("Índices", idx_options,
-                                           default=[i for i in old_spec.get("indices", []) if i in idx_options],
-                                           key=f"p_idx_{p}")
+                    if not is_valid_symbol(pname):
+                        st.error(f"El nombre `{pname}` no es válido.")
+                        continue
+                    if pname in new_params:
+                        st.error(f"El parámetro `{pname}` está repetido.")
+                        continue
 
-                if not is_valid_symbol(pname):
-                    st.error(f"`{pname}` no es válido.")
-                    continue
-                if pname in new_params:
-                    st.error(f"Parámetro `{pname}` duplicado.")
-                    continue
+                    num_elems = total_elements_for_dims(p_indices, spec["indices"])
+                    st.caption(f"Firma: {pretty_signature(pname, p_indices)} | Elementos: {num_elems}")
 
-                n_elems = total_elements(p_idx, index_specs)
-                st.caption(f"Firma: `{pretty_sig(pname, p_idx)}` — {n_elems} elemento(s)")
+                    mode_options = ["Manual", "Aleatorio"] if num_elems <= 12 else ["Aleatorio"]
+                    default_mode = current_params.get(old_name, {}).get("mode", mode_options[0])
+                    if default_mode not in mode_options:
+                        default_mode = mode_options[0]
 
-                mode_opts = ["Manual", "Aleatorio"] if n_elems <= 12 else ["Aleatorio"]
-                old_mode  = old_spec.get("mode", mode_opts[0])
-                mode      = st.radio("Modo", mode_opts,
-                                     index=mode_opts.index(old_mode) if old_mode in mode_opts else 0,
-                                     horizontal=True, key=f"p_mode_{p}")
-                existing  = old_spec.get("values", {})
-                record    = {"indices": p_idx, "mode": mode, "values": {}}
+                    mode = st.selectbox(
+                        "Modo de carga",
+                        options=mode_options,
+                        index=mode_options.index(default_mode),
+                        key=f"param_mode_{p}",
+                    )
 
-                if not p_idx:
-                    # Escalar
-                    if mode == "Manual":
-                        v = st.number_input("Valor", value=scalar_get(existing), key=f"p_scalar_{p}")
-                        record["values"] = scalar_set(v)
-                    else:
-                        low, high, intm, seed = random_controls(f"p_{p}")
-                        if low > high: st.error("Mínimo > máximo."); continue
-                        if st.button(f"Generar {pname}", key=f"p_gen_{p}"):
-                            st.session_state[f"pv_{pname}"] = random_scalar(low, high, intm, seed)
-                        gen = st.session_state.get(f"pv_{pname}", existing or random_scalar(low, high, intm, seed))
-                        record["values"] = gen
-                        st.info(f"Valor: **{scalar_get(gen):.4f}**")
+                    existing_values = current_params.get(old_name, {}).get("values", {})
+                    values = render_parameter_editor(
+                        pname=pname,
+                        p_indices=p_indices,
+                        existing_values=existing_values,
+                        index_specs=spec["indices"],
+                        mode=mode,
+                        ui_key=f"param_ui_{p}_{pname}",
+                    )
 
-                elif len(p_idx) == 1:
-                    labels = index_specs[p_idx[0]]["elements"]
-                    combos = cartesian(p_idx, index_specs)
-                    if mode == "Manual":
-                        df0    = values_1d_to_df(labels, existing)
-                        edited = st.data_editor(df0, use_container_width=True, num_rows="fixed",
-                                                hide_index=True, disabled=["label"], key=f"p_ed1d_{p}")
-                        record["values"] = df_1d_to_values(edited, labels)
-                    else:
-                        low, high, intm, seed = random_controls(f"p_{p}")
-                        if low > high: st.error("Mínimo > máximo."); continue
-                        if st.button(f"Generar {pname}", key=f"p_gen_{p}"):
-                            st.session_state[f"pv_{pname}"] = random_values(combos, low, high, intm, seed)
-                        gen = st.session_state.get(f"pv_{pname}", existing or random_values(combos, low, high, intm, seed))
-                        record["values"] = gen
-                        st.dataframe(values_1d_to_df(labels, gen), use_container_width=True, hide_index=True)
+                    new_params[pname] = {
+                        "indices": p_indices,
+                        "mode": mode,
+                        "values": values,
+                    }
 
-                else:
-                    combos = cartesian(p_idx, index_specs)
-                    if mode == "Manual":
-                        df0    = values_to_df(p_idx, combos, existing)
-                        edited = st.data_editor(df0, use_container_width=True, num_rows="fixed",
-                                                hide_index=True, disabled=list(p_idx), key=f"p_ednd_{p}")
-                        record["values"] = df_to_values(edited, p_idx)
-                    else:
-                        low, high, intm, seed = random_controls(f"p_{p}")
-                        if low > high: st.error("Mínimo > máximo."); continue
-                        if st.button(f"Generar {pname}", key=f"p_gen_{p}"):
-                            st.session_state[f"pv_{pname}"] = random_values(combos, low, high, intm, seed)
-                        gen = st.session_state.get(f"pv_{pname}", existing or random_values(combos, low, high, intm, seed))
-                        record["values"] = gen
-                        st.dataframe(values_to_df(p_idx, combos, gen), use_container_width=True, hide_index=True)
+            st.session_state["model_spec"]["parameters"] = new_params
+            spec = st.session_state["model_spec"]
 
-                new_params[pname] = record
+            if new_params:
+                summary = pd.DataFrame(
+                    [
+                        {
+                            "Parámetro": pretty_signature(name, pspec["indices"]),
+                            "Modo": pspec["mode"],
+                            "Elementos": total_elements_for_dims(pspec["indices"], spec["indices"]),
+                        }
+                        for name, pspec in new_params.items()
+                    ]
+                )
+                st.dataframe(summary, use_container_width=True, hide_index=True)
 
-        spec["parameters"] = new_params
+    # --------------------------------------------------------
+    # Variables
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("3. Variables")
 
-        if new_params:
-            summary = [{"Parámetro": pretty_sig(n, s["indices"]),
-                        "Modo": s["mode"],
-                        "Elementos": total_elements(s["indices"], index_specs)}
-                       for n, s in new_params.items()]
-            st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
+        if not spec["indices"]:
+            st.info("Primero define índices válidos.")
+        else:
+            current_vars = spec["variables"]
+            num_vars = st.number_input(
+                "Número de variables",
+                min_value=0,
+                max_value=30,
+                value=max(1, len(current_vars)) if current_vars else 1,
+                step=1,
+            )
 
-    # ── VARIABLES ────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("3. Variables")
+            new_vars = {}
+            index_name_options = list(spec["indices"].keys())
+            existing_var_names = list(current_vars.keys())
 
-    if not valid_idx or not index_specs:
-        st.info("Primero define índices válidos.")
-    else:
-        idx_options = list(index_specs.keys())
-        cur_vars    = spec["variables"]
-        num_vars    = st.number_input("Número de variables", min_value=0, max_value=30,
-                                       value=max(1, len(cur_vars)), step=1, key="num_vars")
-        new_vars    = {}
-        cur_vnames  = list(cur_vars.keys())
+            for v in range(int(num_vars)):
+                with st.expander(f"Variable {v+1}", expanded=(v == 0)):
+                    old_name = existing_var_names[v] if v < len(existing_var_names) else f"x_{v+1}"
 
-        for v in range(int(num_vars)):
-            with st.expander(f"Variable {v+1}", expanded=v == 0):
-                old_name = cur_vnames[v] if v < len(cur_vnames) else f"x_{v+1}"
-                old_vs   = cur_vars.get(old_name, {})
-                c1, c2, c3 = st.columns([2, 3, 2])
-                with c1:
-                    vname = st.text_input("Nombre", value=old_name, key=f"v_name_{v}").strip()
-                with c2:
-                    v_idx = st.multiselect("Índices", idx_options,
-                                           default=[i for i in old_vs.get("indices", []) if i in idx_options],
-                                           key=f"v_idx_{v}")
-                domain_opts = list(_DOMAIN_LABELS.keys())
-                old_domain  = old_vs.get("domain", "NonNegativeReals")
-                with c3:
-                    domain = st.selectbox("Dominio", domain_opts,
-                                          index=domain_opts.index(old_domain) if old_domain in domain_opts else 1,
-                                          format_func=lambda x: _DOMAIN_LABELS[x],
-                                          key=f"v_domain_{v}")
+                    c1, c2, c3 = st.columns([2, 3, 2])
+                    with c1:
+                        vname = st.text_input(
+                            f"Nombre de la variable {v+1}",
+                            value=old_name,
+                            key=f"var_name_{v}",
+                        ).strip()
+                    with c2:
+                        default_indices = current_vars.get(old_name, {}).get("indices", [])
+                        v_indices = st.multiselect(
+                            f"Índices de {vname or f'variable {v+1}'}",
+                            options=index_name_options,
+                            default=default_indices,
+                            key=f"var_indices_{v}",
+                        )
+                    with c3:
+                        default_domain = current_vars.get(old_name, {}).get("domain", "NonNegativeReals")
+                        if default_domain not in DOMAIN_OPTIONS:
+                            default_domain = "NonNegativeReals"
+                        v_domain = st.selectbox(
+                            "Dominio",
+                            options=DOMAIN_OPTIONS,
+                            index=DOMAIN_OPTIONS.index(default_domain),
+                            key=f"var_domain_{v}",
+                        )
 
-                if not is_valid_symbol(vname):
-                    st.error(f"`{vname}` no es válido.")
-                    continue
-                if vname in new_vars:
-                    st.error(f"Variable `{vname}` duplicada.")
-                    continue
+                    if not is_valid_symbol(vname):
+                        st.error(f"El nombre `{vname}` no es válido.")
+                        continue
+                    if vname in new_vars:
+                        st.error(f"La variable `{vname}` está repetida.")
+                        continue
 
-                st.caption(f"Firma: `{pretty_sig(vname, v_idx)}` — "
-                           f"{total_elements(v_idx, index_specs)} componente(s) — {_DOMAIN_LABELS[domain]}")
-                new_vars[vname] = {"indices": v_idx, "domain": domain}
+                    st.caption(
+                        f"Firma: {pretty_signature(vname, v_indices)} | "
+                        f"Componentes: {total_elements_for_dims(v_indices, spec['indices'])}"
+                    )
 
-        spec["variables"] = new_vars
+                    new_vars[vname] = {"indices": v_indices, "domain": v_domain}
+
+            st.session_state["model_spec"]["variables"] = new_vars
+            spec = st.session_state["model_spec"]
+
+            if new_vars:
+                summary = pd.DataFrame(
+                    [
+                        {
+                            "Variable": pretty_signature(name, vspec["indices"]),
+                            "Dominio": infer_domain_text(vspec["domain"]),
+                            "Componentes": total_elements_for_dims(vspec["indices"], spec["indices"]),
+                        }
+                        for name, vspec in new_vars.items()
+                    ]
+                )
+                st.dataframe(summary, use_container_width=True, hide_index=True)
 
 
-# ═══════════════════════════════════════════════════════
-# SECCIÓN 2: DEFINICIÓN DEL MODELO
-# ═══════════════════════════════════════════════════════
+# ============================================================
+# 2. DEFINICIÓN DEL MODELO
+# ============================================================
 
-elif section == "📐 Definición del modelo":
-    st.header("Definición del modelo")
+elif section == "Definición del modelo":
+    info_card("2. Definición del modelo", "Construye la función objetivo y las familias de restricciones.")
+    spec = st.session_state["model_spec"]
 
     if not spec["indices"]:
-        st.warning("Primero define al menos un índice."); st.stop()
-    if not spec["variables"]:
-        st.warning("Primero define al menos una variable."); st.stop()
-
-    catalog     = object_catalog(spec)
-    index_names = list(spec["indices"].keys())
-
-    # ── TIPO DE PROBLEMA ────────────────────────────────
-    st.subheader("1. Sentido de la optimización")
-    cur_obj   = spec.get("objective") or {}
-    sense_opt = ["minimize", "maximize"]
-    sense     = st.radio("Sentido", sense_opt,
-                         index=sense_opt.index(cur_obj.get("sense", "minimize")),
-                         format_func=lambda x: "Minimizar" if x == "minimize" else "Maximizar",
-                         horizontal=True, key="obj_sense")
-
-    # ── FUNCIÓN OBJETIVO ────────────────────────────────
-    st.markdown("---")
-    st.subheader("2. Función objetivo")
-    old_obj_terms = cur_obj.get("terms", [])
-    n_obj_terms   = st.number_input("Número de términos", min_value=1, max_value=20,
-                                     value=max(1, len(old_obj_terms)), step=1, key="n_obj_terms")
-    obj_terms = []
-    for t in range(int(n_obj_terms)):
-        with st.expander(f"Término FO {t+1}", expanded=True):
-            old_t = old_obj_terms[t] if t < len(old_obj_terms) else None
-            obj_terms.append(term_widget(f"obj_{t}", catalog, index_names, old_t))
-
-    spec["objective"] = {"sense": sense, "terms": obj_terms}
-
-    sense_sym = r"\min" if sense == "minimize" else r"\max"
-    st.markdown("**Vista previa de la función objetivo:**")
-    st.latex(rf"{sense_sym}\ Z = {expr_to_latex(obj_terms)}")
-
-    obj_errs = validate_objective(obj_terms)
-    for e in obj_errs: st.error(e)
-    if not obj_errs: st.success("Función objetivo estructuralmente consistente ✓")
-
-    # ── RESTRICCIONES ───────────────────────────────────
-    st.markdown("---")
-    st.subheader("3. Familias de restricciones")
-    old_cons  = spec.get("constraints", [])
-    n_families = st.number_input("Número de familias", min_value=0, max_value=30,
-                                  value=max(0, len(old_cons)), step=1, key="n_families")
-    new_cons = []
-
-    for r in range(int(n_families)):
-        old_fam = old_cons[r] if r < len(old_cons) else None
-        old_f   = old_fam or {}
-        with st.expander(f"Familia {r+1}: {old_f.get('name', f'R{r+1}')}", expanded=False):
-            c1, c2, c3 = st.columns([2, 2, 1])
-            with c1:
-                fname = st.text_input("Nombre", value=old_f.get("name", f"R{r+1}"), key=f"fname_{r}")
-            with c2:
-                forall = st.multiselect("Para todo", index_names,
-                                        default=[i for i in old_f.get("forall", []) if i in index_names],
-                                        key=f"forall_{r}")
-            with c3:
-                sense_f = st.selectbox("Sentido", ["<=", ">=", "="],
-                                        index=["<=", ">=", "="].index(old_f.get("sense", "<=")),
-                                        key=f"sense_{r}")
-
-            # LHS
-            st.markdown("**Lado izquierdo (LHS)**")
-            old_lhs   = old_f.get("lhs_terms", [])
-            n_lhs     = st.number_input("Términos LHS", min_value=1, max_value=20,
-                                         value=max(1, len(old_lhs)), step=1, key=f"nlhs_{r}")
-            lhs_terms = []
-            for t in range(int(n_lhs)):
-                with st.container():
-                    st.markdown(f"*Término LHS {t+1}*")
-                    old_t = old_lhs[t] if t < len(old_lhs) else None
-                    lhs_terms.append(term_widget(f"lhs_{r}_{t}", catalog, index_names, old_t))
-
-            # RHS
-            st.markdown("**Lado derecho (RHS)**")
-            old_rhs   = old_f.get("rhs_terms", [])
-            n_rhs     = st.number_input("Términos RHS", min_value=1, max_value=20,
-                                         value=max(1, len(old_rhs)), step=1, key=f"nrhs_{r}")
-            rhs_terms = []
-            for t in range(int(n_rhs)):
-                with st.container():
-                    st.markdown(f"*Término RHS {t+1}*")
-                    old_t = old_rhs[t] if t < len(old_rhs) else None
-                    rhs_terms.append(term_widget(f"rhs_{r}_{t}", catalog, index_names, old_t))
-
-            family = {"name": fname, "forall": forall, "sense": sense_f,
-                      "lhs_terms": lhs_terms, "rhs_terms": rhs_terms}
-            fam_errs = validate_constraint(family)
-            st.markdown("**Vista previa:**")
-            st.latex(constraint_to_latex(family))
-            for e in fam_errs: st.error(e)
-            if not fam_errs: st.success(f"Familia `{fname}` consistente ✓")
-            new_cons.append(family)
-
-    spec["constraints"] = new_cons
-
-    # ── RESUMEN ─────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("4. Resumen del modelo")
-    st.latex(rf"{sense_sym}\ Z = {expr_to_latex(obj_terms)}")
-    if new_cons:
-        st.write("**Sujeto a:**")
-        for fam in new_cons:
-            st.latex(constraint_to_latex(fam))
-    else:
-        st.info("Sin restricciones definidas.")
-
-
-# ═══════════════════════════════════════════════════════
-# SECCIÓN 3: SALIDAS DEL MODELO
-# ═══════════════════════════════════════════════════════
-
-elif section == "📊 Salidas del modelo":
-    st.header("Salidas del modelo")
-
-    # Validación
-    st.subheader("1. Validación")
-    errors = []
-    if not spec["indices"]:   errors.append("Sin índices definidos.")
-    if not spec["variables"]: errors.append("Sin variables definidas.")
-    if not spec["objective"]: errors.append("Sin función objetivo.")
-    else:
-        errors.extend(validate_objective(spec["objective"].get("terms", [])))
-    for fam in spec.get("constraints", []):
-        errors.extend(validate_constraint(fam))
-    errors.extend(validate_linearity(spec))
-
-    if errors:
-        for e in errors: st.error(e)
+        st.warning("Primero debes definir al menos un índice.")
         st.stop()
-    st.success("Especificación válida ✓")
+    if not spec["variables"]:
+        st.warning("Primero debes definir al menos una variable.")
+        st.stop()
 
+    catalog = object_catalog(spec)
+    catalog_labels = [obj["label"] for obj in catalog]
+    label_to_item = {obj["label"]: obj for obj in catalog}
+    index_options = list(spec["indices"].keys())
+
+    # --------------------------------------------------------
+    # Sentido del problema
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("1. Tipo de problema")
+        current_obj = spec.get("objective")
+        default_sense = "minimize" if current_obj is None else current_obj.get("sense", "minimize")
+        sense = st.selectbox(
+            "Sentido de la función objetivo",
+            options=["minimize", "maximize"],
+            index=0 if default_sense == "minimize" else 1,
+            format_func=lambda x: "Minimizar" if x == "minimize" else "Maximizar",
+        )
+
+    # --------------------------------------------------------
+    # Función objetivo
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("2. Función objetivo")
+        old_obj_terms = [] if current_obj is None else current_obj.get("terms", [])
+
+        num_obj_terms = st.number_input(
+            "Número de términos en la función objetivo",
+            min_value=1,
+            max_value=20,
+            value=max(1, len(old_obj_terms)) if old_obj_terms else 1,
+            step=1,
+        )
+
+        objective_terms = []
+        for t in range(int(num_obj_terms)):
+            with st.expander(f"Término FO {t+1}", expanded=(t == 0)):
+                term = render_term_builder(
+                    title=f"Término FO {t+1}",
+                    prefix="obj",
+                    term_idx=t,
+                    index_options=index_options,
+                    catalog_labels=catalog_labels,
+                    label_to_item=label_to_item,
+                    old_term=old_obj_terms[t] if t < len(old_obj_terms) else None,
+                    default_num_factors=2,
+                )
+                objective_terms.append(term)
+
+        objective_record = {"sense": sense, "terms": objective_terms}
+        obj_errors = validate_objective_terms(objective_terms)
+
+        st.markdown("### Vista previa")
+        sense_symbol = r"\min" if sense == "minimize" else r"\max"
+        st.latex(rf"{sense_symbol}\ Z = {build_expression_latex(objective_terms)}")
+
+        if obj_errors:
+            for err in obj_errors:
+                st.error(err)
+        else:
+            st.success("La función objetivo está estructuralmente consistente.")
+
+        spec["objective"] = objective_record
+        st.session_state["model_spec"] = spec
+
+    # --------------------------------------------------------
+    # Restricciones
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("3. Familias de restricciones")
+        old_constraints = spec.get("constraints", [])
+
+        num_families = st.number_input(
+            "Número de familias de restricciones",
+            min_value=0,
+            max_value=30,
+            value=len(old_constraints) if old_constraints else 1,
+            step=1,
+        )
+
+        new_constraint_families = []
+
+        for r in range(int(num_families)):
+            old_family = old_constraints[r] if r < len(old_constraints) else None
+            fname_default = f"R{r+1}" if old_family is None else old_family.get("name", f"R{r+1}")
+
+            with st.expander(f"Familia {r+1}: {fname_default}", expanded=(r == 0)):
+                c1, c2, c3 = st.columns([2, 2.2, 1.2])
+                with c1:
+                    family_name = st.text_input(
+                        "Nombre de la familia",
+                        value=fname_default,
+                        key=f"family_name_{r}",
+                    )
+                with c2:
+                    forall = st.multiselect(
+                        "Para todo",
+                        options=index_options,
+                        default=[] if old_family is None else old_family.get("forall", []),
+                        key=f"family_forall_{r}",
+                    )
+                with c3:
+                    sense_family = st.selectbox(
+                        "Sentido",
+                        options=["<=", ">=", "="],
+                        index=0 if old_family is None else ["<=", ">=", "="].index(old_family.get("sense", "<=")),
+                        key=f"family_sense_{r}",
+                    )
+
+                st.markdown("#### Lado izquierdo")
+                old_lhs = [] if old_family is None else old_family.get("lhs_terms", [])
+                lhs_num_terms = st.number_input(
+                    "Número de términos LHS",
+                    min_value=1,
+                    max_value=20,
+                    value=max(1, len(old_lhs)) if old_lhs else 1,
+                    step=1,
+                    key=f"lhs_num_terms_{r}",
+                )
+                lhs_terms = []
+                for t in range(int(lhs_num_terms)):
+                    term = render_term_builder(
+                        title=f"LHS término {t+1}",
+                        prefix=f"lhs_{r}",
+                        term_idx=t,
+                        index_options=index_options,
+                        catalog_labels=catalog_labels,
+                        label_to_item=label_to_item,
+                        old_term=old_lhs[t] if t < len(old_lhs) else None,
+                        default_num_factors=2,
+                    )
+                    lhs_terms.append(term)
+
+                st.markdown("#### Lado derecho")
+                old_rhs = [] if old_family is None else old_family.get("rhs_terms", [])
+                rhs_num_terms = st.number_input(
+                    "Número de términos RHS",
+                    min_value=1,
+                    max_value=20,
+                    value=max(1, len(old_rhs)) if old_rhs else 1,
+                    step=1,
+                    key=f"rhs_num_terms_{r}",
+                )
+                rhs_terms = []
+                for t in range(int(rhs_num_terms)):
+                    term = render_term_builder(
+                        title=f"RHS término {t+1}",
+                        prefix=f"rhs_{r}",
+                        term_idx=t,
+                        index_options=index_options,
+                        catalog_labels=catalog_labels,
+                        label_to_item=label_to_item,
+                        old_term=old_rhs[t] if t < len(old_rhs) else None,
+                        default_num_factors=1,
+                    )
+                    rhs_terms.append(term)
+
+                family_record = {
+                    "name": family_name,
+                    "forall": forall,
+                    "sense": sense_family,
+                    "lhs_terms": lhs_terms,
+                    "rhs_terms": rhs_terms,
+                }
+
+                st.markdown("### Vista previa")
+                st.latex(build_constraint_family_latex(family_record))
+
+                family_errors = validate_constraint_family(family_record)
+                if family_errors:
+                    for err in family_errors:
+                        st.error(err)
+                else:
+                    st.success("La familia de restricciones está estructuralmente consistente.")
+
+                new_constraint_families.append(family_record)
+
+        spec["constraints"] = new_constraint_families
+        st.session_state["model_spec"] = spec
+
+    # --------------------------------------------------------
     # Resumen
-    st.markdown("---")
-    st.subheader("2. Modelo")
-    obj  = spec["objective"]
-    sym  = r"\min" if obj["sense"] == "minimize" else r"\max"
-    st.latex(rf"{sym}\ Z = {expr_to_latex(obj['terms'])}")
-    if spec["constraints"]:
-        st.write("Sujeto a:")
-        for fam in spec["constraints"]:
-            st.latex(constraint_to_latex(fam))
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("4. Resumen de la definición")
+        if spec["objective"] is not None:
+            sense_symbol_resume = r"\min" if spec["objective"]["sense"] == "minimize" else r"\max"
+            st.latex(rf"{sense_symbol_resume}\ Z = {build_expression_latex(spec['objective']['terms'])}")
 
+        if not spec["constraints"]:
+            st.info("No hay familias de restricciones definidas.")
+        else:
+            for fam in spec["constraints"]:
+                st.latex(build_constraint_family_latex(fam))
+
+
+# ============================================================
+# 3. RESOLVER MODELO
+# ============================================================
+
+elif section == "Resolver modelo":
+    info_card("3. Resolver modelo", "Valida, construye y resuelve el modelo en Pyomo.")
+    spec = st.session_state["model_spec"]
+
+    # --------------------------------------------------------
+    # Validación
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("1. Validación previa")
+
+        validation_errors = []
+
+        if not spec["indices"]:
+            validation_errors.append("No hay índices definidos.")
+        if not spec["variables"]:
+            validation_errors.append("No hay variables definidas.")
+        if spec["objective"] is None:
+            validation_errors.append("No hay función objetivo definida.")
+        else:
+            validation_errors.extend(validate_objective_terms(spec["objective"].get("terms", [])))
+
+        for fam in spec.get("constraints", []):
+            validation_errors.extend(validate_constraint_family(fam))
+
+        validation_errors.extend(validate_linearity_of_model(spec))
+
+        if validation_errors:
+            for err in validation_errors:
+                st.error(err)
+            st.stop()
+        else:
+            st.success("La especificación es válida para construir e intentar resolver el modelo.")
+
+    # --------------------------------------------------------
+    # Resumen del modelo
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("2. Resumen del modelo")
+
+        if spec["objective"] is not None:
+            sense_symbol = r"\min" if spec["objective"]["sense"] == "minimize" else r"\max"
+            st.latex(rf"{sense_symbol}\ Z = {build_expression_latex(spec['objective']['terms'])}")
+
+        if not spec["constraints"]:
+            st.info("No hay restricciones definidas.")
+        else:
+            for fam in spec["constraints"]:
+                st.latex(build_constraint_family_latex(fam))
+
+    # --------------------------------------------------------
     # Resolver
-    st.markdown("---")
-    st.subheader("3. Resolver")
-    solver_name = st.selectbox("Solver", ["appsi_highs", "glpk", "cbc"], index=0)
+    # --------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("3. Resolver modelo")
 
-    if st.button("▶ Resolver modelo", type="primary"):
-        with st.spinner("Construyendo y resolviendo…"):
+        solver_name = st.selectbox(
+            "Selecciona el solver",
+            options=SOLVER_OPTIONS,
+            index=SOLVER_OPTIONS.index("appsi_highs"),
+        )
+
+        solve_button = st.button("Resolver modelo", type="primary", use_container_width=False)
+
+        if solve_button:
             try:
-                model  = build_pyomo_model(spec)
-                solver = pyo.SolverFactory(solver_name)
+                model = build_pyomo_model_from_spec(spec)
+                solver = solver_factory_from_name(solver_name)
                 result = solver.solve(model)
 
-                spec["results"] = {
-                    "solver_name":          solver_name,
-                    "termination_condition": str(result.solver.termination_condition),
-                    "status":               str(result.solver.status),
-                    "objective_value":      pyo.value(model.OBJ),
+                termination = str(result.solver.termination_condition)
+                status = str(result.solver.status)
+                objective_value = pyo.value(model.OBJ)
+
+                st.session_state["model_spec"]["results"] = {
+                    "solver_name": solver_name,
+                    "termination_condition": termination,
+                    "status": status,
+                    "objective_value": objective_value,
                 }
-                st.session_state["solved_model"] = model
-                st.success("¡Modelo resuelto!")
-            except Exception as ex:
-                st.error(f"Error: {ex}"); st.stop()
+                st.session_state["solved_model_object"] = model
+                st.success("Modelo resuelto correctamente.")
 
+            except Exception as e:
+                st.session_state["model_spec"]["results"] = None
+                st.session_state["solved_model_object"] = None
+                st.error(f"Error al construir o resolver el modelo: {e}")
+
+    # --------------------------------------------------------
     # Resultados
-    results = spec.get("results")
-    model   = st.session_state.get("solved_model")
-
-    if not results or not model:
-        st.info("Aún no has resuelto el modelo.")
-    else:
-        st.markdown("---")
+    # --------------------------------------------------------
+    with st.container(border=True):
         st.subheader("4. Resultados")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Solver",       results["solver_name"])
-        c2.metric("Status",       results["status"])
-        c3.metric("Terminación",  results["termination_condition"])
-        c4.metric("Valor óptimo", f"{results['objective_value']:.6f}")
 
-        st.markdown("---")
-        st.subheader("5. Solución por variable")
-        vnames = list(spec["variables"].keys())
-        sel    = st.selectbox("Variable", vnames)
-        df_v   = var_to_df(model, sel, spec["variables"][sel], spec["indices"])
-        st.dataframe(df_v, use_container_width=True, hide_index=True)
-        st.download_button(f"⬇ Descargar {sel} (CSV)",
-                           df_v.to_csv(index=False).encode(),
-                           f"sol_{sel}.csv", "text/csv")
+        results = st.session_state["model_spec"].get("results")
+        solved_model = st.session_state.get("solved_model_object")
 
-        st.markdown("---")
-        st.subheader("6. Variables no nulas")
-        df_nz = nonzero_df(model, spec)
-        st.dataframe(df_nz, use_container_width=True, hide_index=True)
-        st.download_button("⬇ Descargar variables no nulas (CSV)",
-                           df_nz.to_csv(index=False).encode(),
-                           "sol_no_nulas.csv", "text/csv")
+        if results is None or solved_model is None:
+            st.info("Aún no has resuelto el modelo.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Solver", results["solver_name"])
+            with c2:
+                st.metric("Status", results["status"])
+            with c3:
+                st.metric("Termination", results["termination_condition"])
+
+            st.metric("Valor óptimo", f"{results['objective_value']:,.6f}")
+
+    # --------------------------------------------------------
+    # Solución por variable
+    # --------------------------------------------------------
+    if st.session_state["model_spec"].get("results") is not None and st.session_state.get("solved_model_object") is not None:
+        solved_model = st.session_state["solved_model_object"]
+
+        with st.container(border=True):
+            st.subheader("5. Solución por variable")
+
+            variable_names = list(spec["variables"].keys())
+            selected_var = st.selectbox("Selecciona una variable", options=variable_names)
+
+            var_df = variable_solution_to_dataframe(
+                solved_model,
+                selected_var,
+                spec["variables"][selected_var],
+                spec["indices"],
+            )
+
+            st.dataframe(var_df, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                f"Descargar solución de {selected_var}",
+                data=var_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"solucion_{selected_var}.csv",
+                mime="text/csv",
+            )
+
+        with st.container(border=True):
+            st.subheader("6. Variables no nulas")
+
+            nz_df = nonzero_variables_solution_flat(solved_model, spec)
+            if nz_df.empty:
+                st.info("No hay variables no nulas.")
+            else:
+                st.dataframe(nz_df, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Descargar variables no nulas",
+                data=nz_df.to_csv(index=False).encode("utf-8"),
+                file_name="solucion_variables_no_nulas.csv",
+                mime="text/csv",
+            )
