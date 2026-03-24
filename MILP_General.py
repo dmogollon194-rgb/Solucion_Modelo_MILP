@@ -1116,6 +1116,24 @@ st.sidebar.markdown("""
 st.title("Solucionador de Modelos Lineales")
 st.caption("Esta aplicación está diseñada para solucionar modelos lineales con un solo objetivo.")
 
+if section == "Ingreso de información":
+
+    info_hero(
+        "1. Ingreso de información",
+        "Define los índices, parámetros y variables que conformarán la estructura base del modelo."
+    )
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        metric_card("Índices", len(st.session_state["model_spec"]["indices"]))
+    with c2:
+        metric_card("Parámetros", len(st.session_state["model_spec"]["parameters"]))
+    with c3:
+        metric_card("Variables", len(st.session_state["model_spec"]["variables"]))
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    tab_ind, tab_par, tab_var = st.tabs(["Índices", "Parámetros", "Variables"])
     # ========================================================
     # TAB 1: ÍNDICES
     # ========================================================
