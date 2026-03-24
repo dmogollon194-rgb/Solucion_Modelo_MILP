@@ -1873,21 +1873,7 @@ elif section == "Salidas del modelo":
         )
 
         st.markdown("---")
-        st.subheader("6. Todas las variables")
-
-        all_df = all_variables_solution_flat(solved_model, spec)
-        st.dataframe(all_df, use_container_width=True, hide_index=True)
-
-        csv_all = all_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Descargar todas las variables en CSV",
-            data=csv_all,
-            file_name="solucion_todas_las_variables.csv",
-            mime="text/csv"
-        )
-
-        st.markdown("---")
-        st.subheader("7. Variables no nulas")
+        st.subheader("6. Variables no nulas")
 
         nz_df = nonzero_variables_solution_flat(solved_model, spec)
         st.dataframe(nz_df, use_container_width=True, hide_index=True)
