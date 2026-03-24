@@ -995,11 +995,9 @@ st.sidebar.write(f"Variables: {len(spec['variables'])}")
 st.title("📐 Constructor de Modelos Algebraicos")
 st.caption("Definición, estructuración y resolución visual de modelos algebraicos.")
 
-# ============================================================
-# SECCIÓN 1: INGRESO DE INFORMACIÓN
-# ============================================================
-
 if section == "Ingreso de información":
+
+    st.caption("Definición, estructuración y resolución visual de modelos algebraicos.")
 
     info_hero(
         "1. Ingreso de información",
@@ -1014,393 +1012,427 @@ if section == "Ingreso de información":
     with c3:
         metric_card("Variables", len(st.session_state["model_spec"]["variables"]))
 
-    st.markdown("<div class='section-box'><div class='section-subtitle'>Índices</div><div class='section-text'>Define los índices del modelo. Ejemplos: i, j, k.</div></div>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    num_indices = st.number_input(
-        "Número de índices",
-        min_value=1,
-        max_value=10,
-        value=max(1, len(st.session_state["model_spec"]["indices"]) or 3),
-        step=1,
-        key="num_indices"
-    )
+    tab_ind, tab_par, tab_var = st.tabs(["🔢 Índices", "📊 Parámetros", "✖️ Variables"])
 
-    index_rows = []
-    used_names = set()
-    index_errors = []
+    # ========================================================
+    # TAB 1: ÍNDICES
+    # ========================================================
+    with tab_ind:
+        st.markdown(
+            "<div class='section-box'><div class='section-subtitle'>Configuración de índices</div>"
+            "<div class='section-text'>Define los conjuntos base del modelo.</div></div>",
+            unsafe_allow_html=True
+        )
 
-    for r in range(int(num_indices)):
-        col1, col2 = st.columns([2, 2])
+        num_indices = st.number_input(
+            "Número de índices",
+            min_value=1,
+            max_value=10,
+            value=max(1, len(st.session_state["model_spec"]["indices"]) or 3),
+            step=1,
+            key="num_indices"
+        )
 
-        default_name = f"idx_{r+1}"
-        if r < len(st.session_state["model_spec"]["indices"]):
-            existing_names = list(st.session_state["model_spec"]["indices"].keys())
-            default_name = existing_names[r]
+        index_rows = []
+        used_names = set()
+        index_errors = []
 
-        with col1:
-            idx_name = st.text_input(
-                f"Nombre del índice {r+1}",
-                value=default_name,
-                key=f"index_name_{r}"
-            ).strip()
+        for r in range(int(num_indices)):
+            col1, col2 = st.columns([2, 2])
 
-        with col2:
-            existing_size = 3
+            default_name = f"idx_{r+1}"
             if r < len(st.session_state["model_spec"]["indices"]):
                 existing_names = list(st.session_state["model_spec"]["indices"].keys())
-                if r < len(existing_names):
-                    existing_size = st.session_state["model_spec"]["indices"][existing_names[r]]["size"]
-
-            idx_size = st.number_input(
-                f"Tamaño de {idx_name or f'índice {r+1}'}",
-                min_value=1,
-                max_value=1000,
-                value=int(existing_size),
-                step=1,
-                key=f"index_size_{r}"
-            )
-
-        if not is_valid_symbol(idx_name):
-            index_errors.append(f"El nombre `{idx_name}` no es válido.")
-        elif idx_name in used_names:
-            index_errors.append(f"El índice `{idx_name}` está repetido.")
-        else:
-            used_names.add(idx_name)
-            index_rows.append({
-                "name": sanitize_symbol(idx_name),
-                "size": int(idx_size),
-                "elements": build_index_elements(int(idx_size), sanitize_symbol(idx_name))
-            })
-
-    for err in index_errors:
-        st.error(err)
-
-    valid_indices = len(index_errors) == 0
-
-    index_specs = {}
-    if valid_indices:
-        for row in index_rows:
-            index_specs[row["name"]] = {
-                "size": row["size"],
-                "elements": row["elements"]
-            }
-        st.session_state["model_spec"]["indices"] = index_specs
-        reset_parameters_if_invalid(index_specs)
-        reset_variables_if_invalid(index_specs)
-
-    if valid_indices and len(index_specs) > 0:
-        st.write("**Vista previa de índices**")
-        preview_idx = []
-        for idx_name, idx_spec in index_specs.items():
-            preview_idx.append({
-                "Índice": idx_name,
-                "Tamaño": idx_spec["size"],
-                "Elementos": ", ".join(idx_spec["elements"])
-            })
-        st.dataframe(pd.DataFrame(preview_idx), use_container_width=True, hide_index=True)
-
-    st.markdown("<div class='section-box'><div class='section-subtitle'>Parámetros</div><div class='section-text'>Define parámetros escalares, vectores, matrices o tensores.</div></div>", unsafe_allow_html=True)
-
-    if not valid_indices or len(index_specs) == 0:
-        st.info("Primero define índices válidos.")
-    else:
-        current_params = st.session_state["model_spec"]["parameters"]
-        default_num_params = max(1, len(current_params)) if len(current_params) > 0 else 1
-
-        num_params = st.number_input(
-            "Número de parámetros",
-            min_value=0,
-            max_value=30,
-            value=default_num_params,
-            step=1,
-            key="num_params"
-        )
-
-        new_params_spec = {}
-        index_name_options = list(index_specs.keys())
-
-        for p in range(int(num_params)):
-            st.markdown(f"#### Parámetro {p+1}")
-
-            existing_param_names = list(current_params.keys())
-            old_name = existing_param_names[p] if p < len(existing_param_names) else f"param_{p+1}"
-
-            col1, col2 = st.columns([2, 3])
+                default_name = existing_names[r]
 
             with col1:
-                pname = st.text_input(
-                    f"Nombre del parámetro {p+1}",
-                    value=old_name,
-                    key=f"param_name_{p}"
+                idx_name = st.text_input(
+                    f"Nombre del índice {r+1}",
+                    value=default_name,
+                    key=f"index_name_{r}"
                 ).strip()
 
             with col2:
-                default_indices = current_params.get(old_name, {}).get("indices", [])
-                p_indices = st.multiselect(
-                    f"Índices de {pname or f'parámetro {p+1}'}",
-                    options=index_name_options,
-                    default=default_indices,
-                    key=f"param_indices_{p}"
+                existing_size = 3
+                if r < len(st.session_state["model_spec"]["indices"]):
+                    existing_names = list(st.session_state["model_spec"]["indices"].keys())
+                    if r < len(existing_names):
+                        existing_size = st.session_state["model_spec"]["indices"][existing_names[r]]["size"]
+
+                idx_size = st.number_input(
+                    f"Tamaño de {idx_name or f'índice {r+1}'}",
+                    min_value=1,
+                    max_value=1000,
+                    value=int(existing_size),
+                    step=1,
+                    key=f"index_size_{r}"
                 )
 
-            if not is_valid_symbol(pname):
-                st.error(f"El nombre `{pname}` no es válido.")
-                continue
+            if not is_valid_symbol(idx_name):
+                index_errors.append(f"El nombre `{idx_name}` no es válido.")
+            elif idx_name in used_names:
+                index_errors.append(f"El índice `{idx_name}` está repetido.")
+            else:
+                used_names.add(idx_name)
+                index_rows.append({
+                    "name": sanitize_symbol(idx_name),
+                    "size": int(idx_size),
+                    "elements": build_index_elements(int(idx_size), sanitize_symbol(idx_name))
+                })
 
-            if pname in new_params_spec:
-                st.error(f"El parámetro `{pname}` está repetido.")
-                continue
+        for err in index_errors:
+            st.error(err)
 
-            num_elems = total_elements_for_dims(p_indices, index_specs)
-            st.write(
-                f"**Firma:** `{pretty_param_signature(pname, p_indices)}`  \n"
-                f"**Número total de elementos:** `{num_elems}`"
+        valid_indices = len(index_errors) == 0
+
+        index_specs = {}
+        if valid_indices:
+            for row in index_rows:
+                index_specs[row["name"]] = {
+                    "size": row["size"],
+                    "elements": row["elements"]
+                }
+            st.session_state["model_spec"]["indices"] = index_specs
+            reset_parameters_if_invalid(index_specs)
+            reset_variables_if_invalid(index_specs)
+
+        if valid_indices and len(index_specs) > 0:
+            st.write("**Vista previa de índices**")
+            preview_idx = []
+            for idx_name, idx_spec in index_specs.items():
+                preview_idx.append({
+                    "Índice": idx_name,
+                    "Tamaño": idx_spec["size"],
+                    "Elementos": ", ".join(idx_spec["elements"])
+                })
+            st.dataframe(pd.DataFrame(preview_idx), use_container_width=True, hide_index=True)
+
+    # ========================================================
+    # TAB 2: PARÁMETROS
+    # ========================================================
+    with tab_par:
+        st.markdown(
+            "<div class='section-box'><div class='section-subtitle'>Configuración de parámetros</div>"
+            "<div class='section-text'>Define parámetros escalares, vectores, matrices o tensores.</div></div>",
+            unsafe_allow_html=True
+        )
+
+        spec = st.session_state["model_spec"]
+        index_specs = spec["indices"]
+
+        if len(index_specs) == 0:
+            st.info("Primero define índices válidos.")
+        else:
+            current_params = spec["parameters"]
+            default_num_params = max(1, len(current_params)) if len(current_params) > 0 else 1
+
+            num_params = st.number_input(
+                "Número de parámetros",
+                min_value=0,
+                max_value=30,
+                value=default_num_params,
+                step=1,
+                key="num_params"
             )
 
-            mode_options = ["Manual", "Aleatorio"] if num_elems <= 12 else ["Aleatorio"]
+            new_params_spec = {}
+            index_name_options = list(index_specs.keys())
 
-            default_mode = current_params.get(old_name, {}).get("mode", mode_options[0])
-            if default_mode not in mode_options:
-                default_mode = mode_options[0]
+            for p in range(int(num_params)):
+                st.markdown(f"#### Parámetro {p+1}")
 
-            mode = st.selectbox(
-                f"Modo de carga para {pname}",
-                options=mode_options,
-                index=mode_options.index(default_mode),
-                key=f"param_mode_{p}"
-            )
+                existing_param_names = list(current_params.keys())
+                old_name = existing_param_names[p] if p < len(existing_param_names) else f"param_{p+1}"
 
-            existing_values = current_params.get(old_name, {}).get("values", {})
-            param_record = {
-                "indices": p_indices,
-                "mode": mode,
-                "values": {},
-            }
+                col1, col2 = st.columns([2, 3])
 
-            if len(p_indices) == 0:
-                if mode == "Manual":
-                    val = st.number_input(
-                        f"Valor de {pname}",
-                        value=scalar_from_values_dict(existing_values, 0.0),
-                        key=f"param_scalar_manual_{p}"
+                with col1:
+                    pname = st.text_input(
+                        f"Nombre del parámetro {p+1}",
+                        value=old_name,
+                        key=f"param_name_{p}"
+                    ).strip()
+
+                with col2:
+                    default_indices = current_params.get(old_name, {}).get("indices", [])
+                    p_indices = st.multiselect(
+                        f"Índices de {pname or f'parámetro {p+1}'}",
+                        options=index_name_options,
+                        default=default_indices,
+                        key=f"param_indices_{p}"
                     )
-                    param_record["values"] = values_dict_from_scalar(val)
-                else:
-                    c1, c2, c3, c4 = st.columns(4)
-                    with c1:
-                        low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_scalar_low_{p}")
-                    with c2:
-                        high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_scalar_high_{p}")
-                    with c3:
-                        integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_scalar_integer_{p}")
-                    with c4:
-                        seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_scalar_seed_{p}")
 
-                    if low > high:
-                        st.error("El mínimo no puede ser mayor que el máximo.")
-                        continue
+                if not is_valid_symbol(pname):
+                    st.error(f"El nombre `{pname}` no es válido.")
+                    continue
 
-                    if st.button(f"Generar {pname}", key=f"btn_generate_scalar_{p}"):
-                        st.session_state[f"generated_scalar_values_{pname}"] = random_scalar(
-                            low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                if pname in new_params_spec:
+                    st.error(f"El parámetro `{pname}` está repetido.")
+                    continue
+
+                num_elems = total_elements_for_dims(p_indices, index_specs)
+                st.write(
+                    f"**Firma:** `{pretty_param_signature(pname, p_indices)}`  \n"
+                    f"**Número total de elementos:** `{num_elems}`"
+                )
+
+                mode_options = ["Manual", "Aleatorio"] if num_elems <= 12 else ["Aleatorio"]
+
+                default_mode = current_params.get(old_name, {}).get("mode", mode_options[0])
+                if default_mode not in mode_options:
+                    default_mode = mode_options[0]
+
+                mode = st.radio(
+                    f"Modo de carga para {pname}",
+                    options=mode_options,
+                    index=mode_options.index(default_mode),
+                    horizontal=True,
+                    key=f"param_mode_{p}"
+                )
+
+                existing_values = current_params.get(old_name, {}).get("values", {})
+                param_record = {
+                    "indices": p_indices,
+                    "mode": mode,
+                    "values": {},
+                }
+
+                if len(p_indices) == 0:
+                    if mode == "Manual":
+                        val = st.number_input(
+                            f"Valor de {pname}",
+                            value=scalar_from_values_dict(existing_values, 0.0),
+                            key=f"param_scalar_manual_{p}"
                         )
+                        param_record["values"] = values_dict_from_scalar(val)
+                    else:
+                        c1, c2, c3, c4 = st.columns(4)
+                        with c1:
+                            low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_scalar_low_{p}")
+                        with c2:
+                            high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_scalar_high_{p}")
+                        with c3:
+                            integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_scalar_integer_{p}")
+                        with c4:
+                            seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_scalar_seed_{p}")
 
-                    generated_values = st.session_state.get(
-                        f"generated_scalar_values_{pname}",
-                        existing_values if existing_values else random_scalar(low, high, integer_mode, int(seed))
-                    )
-                    param_record["values"] = generated_values
-                    st.write(f"Valor generado: **{scalar_from_values_dict(generated_values):.4f}**")
+                        if low > high:
+                            st.error("El mínimo no puede ser mayor que el máximo.")
+                            continue
 
-            elif len(p_indices) == 1:
-                idx = p_indices[0]
-                labels = index_specs[idx]["elements"]
+                        if st.button(f"Generar {pname}", key=f"btn_generate_scalar_{p}"):
+                            st.session_state[f"generated_scalar_values_{pname}"] = random_scalar(
+                                low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                            )
 
-                if mode == "Manual":
-                    df0 = dataframe_1d_from_values_dict(labels, existing_values)
-                    edited_df = st.data_editor(
-                        df0,
-                        use_container_width=True,
-                        num_rows="fixed",
-                        hide_index=True,
-                        disabled=["label"],
-                        key=f"param_manual_1d_{p}"
-                    )
-                    param_record["values"] = values_dict_from_dataframe_1d(edited_df, labels)
+                        generated_values = st.session_state.get(
+                            f"generated_scalar_values_{pname}",
+                            existing_values if existing_values else random_scalar(low, high, integer_mode, int(seed))
+                        )
+                        param_record["values"] = generated_values
+                        st.write(f"Valor generado: **{scalar_from_values_dict(generated_values):.4f}**")
+
+                elif len(p_indices) == 1:
+                    idx = p_indices[0]
+                    labels = index_specs[idx]["elements"]
+
+                    if mode == "Manual":
+                        df0 = dataframe_1d_from_values_dict(labels, existing_values)
+                        edited_df = st.data_editor(
+                            df0,
+                            use_container_width=True,
+                            num_rows="fixed",
+                            hide_index=True,
+                            disabled=["label"],
+                            key=f"param_manual_1d_{p}"
+                        )
+                        param_record["values"] = values_dict_from_dataframe_1d(edited_df, labels)
+                    else:
+                        c1, c2, c3, c4 = st.columns(4)
+                        with c1:
+                            low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_random_low_{p}")
+                        with c2:
+                            high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_random_high_{p}")
+                        with c3:
+                            integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_random_integer_{p}")
+                        with c4:
+                            seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_random_seed_{p}")
+
+                        if low > high:
+                            st.error("El mínimo no puede ser mayor que el máximo.")
+                            continue
+
+                        combos = cartesian_labels(p_indices, index_specs)
+
+                        if st.button(f"Generar valores de {pname}", key=f"btn_generate_{p}"):
+                            st.session_state[f"generated_values_{pname}"] = random_values_dict(
+                                combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                            )
+
+                        generated_values = st.session_state.get(
+                            f"generated_values_{pname}",
+                            existing_values if existing_values else random_values_dict(
+                                combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                            )
+                        )
+                        param_record["values"] = generated_values
+                        preview_df = dataframe_1d_from_values_dict(labels, generated_values)
+                        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
                 else:
-                    c1, c2, c3, c4 = st.columns(4)
-                    with c1:
-                        low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_random_low_{p}")
-                    with c2:
-                        high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_random_high_{p}")
-                    with c3:
-                        integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_random_integer_{p}")
-                    with c4:
-                        seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_random_seed_{p}")
-
-                    if low > high:
-                        st.error("El mínimo no puede ser mayor que el máximo.")
-                        continue
-
                     combos = cartesian_labels(p_indices, index_specs)
 
-                    if st.button(f"Generar valores de {pname}", key=f"btn_generate_{p}"):
-                        st.session_state[f"generated_values_{pname}"] = random_values_dict(
-                            combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                    if mode == "Manual":
+                        df0 = dataframe_nd_from_values_dict(p_indices, combos, existing_values)
+                        edited_df = st.data_editor(
+                            df0,
+                            use_container_width=True,
+                            num_rows="fixed",
+                            hide_index=True,
+                            disabled=list(p_indices),
+                            key=f"param_manual_nd_{p}"
                         )
+                        param_record["values"] = values_dict_from_dataframe_nd(edited_df, p_indices)
+                    else:
+                        c1, c2, c3, c4 = st.columns(4)
+                        with c1:
+                            low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_random_low_{p}")
+                        with c2:
+                            high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_random_high_{p}")
+                        with c3:
+                            integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_random_integer_{p}")
+                        with c4:
+                            seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_random_seed_{p}")
 
-                    generated_values = st.session_state.get(
-                        f"generated_values_{pname}",
-                        existing_values if existing_values else random_values_dict(
-                            combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                        if low > high:
+                            st.error("El mínimo no puede ser mayor que el máximo.")
+                            continue
+
+                        if st.button(f"Generar valores de {pname}", key=f"btn_generate_nd_{p}"):
+                            st.session_state[f"generated_values_{pname}"] = random_values_dict(
+                                combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                            )
+
+                        generated_values = st.session_state.get(
+                            f"generated_values_{pname}",
+                            existing_values if existing_values else random_values_dict(
+                                combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                            )
                         )
-                    )
-                    param_record["values"] = generated_values
-                    preview_df = dataframe_1d_from_values_dict(labels, generated_values)
-                    st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                        param_record["values"] = generated_values
+                        preview_df = dataframe_nd_from_values_dict(p_indices, combos, generated_values)
+                        st.dataframe(preview_df, use_container_width=True, hide_index=True)
 
-            else:
-                combos = cartesian_labels(p_indices, index_specs)
+                new_params_spec[pname] = param_record
 
-                if mode == "Manual":
-                    df0 = dataframe_nd_from_values_dict(p_indices, combos, existing_values)
-                    edited_df = st.data_editor(
-                        df0,
-                        use_container_width=True,
-                        num_rows="fixed",
-                        hide_index=True,
-                        disabled=list(p_indices),
-                        key=f"param_manual_nd_{p}"
-                    )
-                    param_record["values"] = values_dict_from_dataframe_nd(edited_df, p_indices)
-                else:
-                    c1, c2, c3, c4 = st.columns(4)
-                    with c1:
-                        low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_random_low_{p}")
-                    with c2:
-                        high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_random_high_{p}")
-                    with c3:
-                        integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_random_integer_{p}")
-                    with c4:
-                        seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_random_seed_{p}")
+            st.session_state["model_spec"]["parameters"] = new_params_spec
 
-                    if low > high:
-                        st.error("El mínimo no puede ser mayor que el máximo.")
-                        continue
+            if len(new_params_spec) > 0:
+                st.write("**Resumen de parámetros**")
+                rows = []
+                for pname, pspec in new_params_spec.items():
+                    rows.append({
+                        "Parámetro": pretty_param_signature(pname, pspec["indices"]),
+                        "Modo": pspec["mode"],
+                        "Elementos": total_elements_for_dims(pspec["indices"], index_specs)
+                    })
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-                    if st.button(f"Generar valores de {pname}", key=f"btn_generate_nd_{p}"):
-                        st.session_state[f"generated_values_{pname}"] = random_values_dict(
-                            combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
-                        )
-
-                    generated_values = st.session_state.get(
-                        f"generated_values_{pname}",
-                        existing_values if existing_values else random_values_dict(
-                            combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
-                        )
-                    )
-                    param_record["values"] = generated_values
-                    preview_df = dataframe_nd_from_values_dict(p_indices, combos, generated_values)
-                    st.dataframe(preview_df, use_container_width=True, hide_index=True)
-
-            new_params_spec[pname] = param_record
-
-        st.session_state["model_spec"]["parameters"] = new_params_spec
-
-        if len(new_params_spec) > 0:
-            st.write("**Resumen de parámetros**")
-            rows = []
-            for pname, pspec in new_params_spec.items():
-                rows.append({
-                    "Parámetro": pretty_param_signature(pname, pspec["indices"]),
-                    "Modo": pspec["mode"],
-                    "Elementos": total_elements_for_dims(pspec["indices"], index_specs)
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    st.markdown("<div class='section-box'><div class='section-subtitle'>Variables</div><div class='section-text'>Define las variables de decisión del modelo y su dominio.</div></div>", unsafe_allow_html=True)
-
-    if not valid_indices or len(index_specs) == 0:
-        st.info("Primero define índices válidos.")
-    else:
-        current_vars = st.session_state["model_spec"]["variables"]
-        default_num_vars = max(1, len(current_vars)) if len(current_vars) > 0 else 1
-
-        num_vars = st.number_input(
-            "Número de variables",
-            min_value=0,
-            max_value=30,
-            value=default_num_vars,
-            step=1,
-            key="num_vars"
+    # ========================================================
+    # TAB 3: VARIABLES
+    # ========================================================
+    with tab_var:
+        st.markdown(
+            "<div class='section-box'><div class='section-subtitle'>Configuración de variables</div>"
+            "<div class='section-text'>Define las variables de decisión del modelo y su dominio.</div></div>",
+            unsafe_allow_html=True
         )
 
-        new_vars_spec = {}
-        index_name_options = list(index_specs.keys())
+        spec = st.session_state["model_spec"]
+        index_specs = spec["indices"]
 
-        for v in range(int(num_vars)):
-            st.markdown(f"#### Variable {v+1}")
+        if len(index_specs) == 0:
+            st.info("Primero define índices válidos.")
+        else:
+            current_vars = spec["variables"]
+            default_num_vars = max(1, len(current_vars)) if len(current_vars) > 0 else 1
 
-            existing_var_names = list(current_vars.keys())
-            old_name = existing_var_names[v] if v < len(existing_var_names) else f"x_{v+1}"
+            num_vars = st.number_input(
+                "Número de variables",
+                min_value=0,
+                max_value=30,
+                value=default_num_vars,
+                step=1,
+                key="num_vars"
+            )
 
-            col1, col2, col3 = st.columns([2, 3, 2])
+            new_vars_spec = {}
+            index_name_options = list(index_specs.keys())
 
-            with col1:
-                vname = st.text_input(
-                    f"Nombre de la variable {v+1}",
-                    value=old_name,
-                    key=f"var_name_{v}"
-                ).strip()
+            for v in range(int(num_vars)):
+                st.markdown(f"#### Variable {v+1}")
 
-            with col2:
-                default_indices = current_vars.get(old_name, {}).get("indices", [])
-                v_indices = st.multiselect(
-                    f"Índices de {vname or f'variable {v+1}'}",
-                    options=index_name_options,
-                    default=default_indices,
-                    key=f"var_indices_{v}"
-                )
+                existing_var_names = list(current_vars.keys())
+                old_name = existing_var_names[v] if v < len(existing_var_names) else f"x_{v+1}"
 
-            domain_options = ["Binary", "NonNegativeReals", "NonNegativeIntegers"]
-            default_domain = current_vars.get(old_name, {}).get("domain", "NonNegativeReals")
-            if default_domain not in domain_options:
-                default_domain = "NonNegativeReals"
+                col1, col2, col3 = st.columns([2, 3, 2])
 
-            with col3:
-                v_domain = st.selectbox(
-                    f"Dominio de {vname or f'variable {v+1}'}",
-                    options=domain_options,
-                    index=domain_options.index(default_domain),
-                    key=f"var_domain_{v}"
-                )
+                with col1:
+                    vname = st.text_input(
+                        f"Nombre de la variable {v+1}",
+                        value=old_name,
+                        key=f"var_name_{v}"
+                    ).strip()
 
-            if not is_valid_symbol(vname):
-                st.error(f"El nombre `{vname}` no es válido.")
-                continue
+                with col2:
+                    default_indices = current_vars.get(old_name, {}).get("indices", [])
+                    v_indices = st.multiselect(
+                        f"Índices de {vname or f'variable {v+1}'}",
+                        options=index_name_options,
+                        default=default_indices,
+                        key=f"var_indices_{v}"
+                    )
 
-            if vname in new_vars_spec:
-                st.error(f"La variable `{vname}` está repetida.")
-                continue
+                domain_options = ["Binary", "NonNegativeReals", "NonNegativeIntegers"]
+                default_domain = current_vars.get(old_name, {}).get("domain", "NonNegativeReals")
+                if default_domain not in domain_options:
+                    default_domain = "NonNegativeReals"
 
-            new_vars_spec[vname] = {
-                "indices": v_indices,
-                "domain": v_domain
-            }
+                with col3:
+                    v_domain = st.selectbox(
+                        f"Dominio de {vname or f'variable {v+1}'}",
+                        options=domain_options,
+                        index=domain_options.index(default_domain),
+                        key=f"var_domain_{v}"
+                    )
 
-        st.session_state["model_spec"]["variables"] = new_vars_spec
+                if not is_valid_symbol(vname):
+                    st.error(f"El nombre `{vname}` no es válido.")
+                    continue
 
-        if len(new_vars_spec) > 0:
-            st.write("**Resumen de variables**")
-            rows = []
-            for vname, vspec in new_vars_spec.items():
-                rows.append({
-                    "Variable": pretty_var_signature(vname, vspec["indices"]),
-                    "Dominio": infer_domain_text(vspec["domain"]),
-                    "Componentes": total_elements_for_dims(vspec["indices"], index_specs)
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                if vname in new_vars_spec:
+                    st.error(f"La variable `{vname}` está repetida.")
+                    continue
 
+                new_vars_spec[vname] = {
+                    "indices": v_indices,
+                    "domain": v_domain
+                }
+
+            st.session_state["model_spec"]["variables"] = new_vars_spec
+
+            if len(new_vars_spec) > 0:
+                st.write("**Resumen de variables**")
+                rows = []
+                for vname, vspec in new_vars_spec.items():
+                    rows.append({
+                        "Variable": pretty_var_signature(vname, vspec["indices"]),
+                        "Dominio": infer_domain_text(vspec["domain"]),
+                        "Componentes": total_elements_for_dims(vspec["indices"], index_specs)
+                    })
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 # ============================================================
 # SECCIÓN 2: DEFINICIÓN DEL MODELO
