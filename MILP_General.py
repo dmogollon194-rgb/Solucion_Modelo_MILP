@@ -1990,7 +1990,7 @@ elif section == "Salidas del modelo":
     else:
         st.success("La especificación es válida para intentar construir y resolver el modelo.")
 
-    tab_modelo, tab_resolver, tab_vars = st.tabs(
+    tab_resolver, tab_vars = st.tabs(
         ["Resolver", "Variables solución"]
     )
 
