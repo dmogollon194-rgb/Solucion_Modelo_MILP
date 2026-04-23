@@ -31,7 +31,6 @@ st.markdown(watermark, unsafe_allow_html=True)
 
 st.set_page_config(
     page_title="Constructor de Modelos Algebraicos",
-    page_icon="📐",
     layout="wide",
 )
 
