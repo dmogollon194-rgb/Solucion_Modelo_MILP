@@ -243,7 +243,10 @@ def init_session_state() -> None:
             "objective": None,
             "constraints": [],
             "results": None,
-        }
+        },
+        # Controla qué familia queda abierta al editar restricciones.
+        # Esto evita que, al modificar un widget, todas las familias se vean desordenadas.
+        "constraint_family_expander_abierto": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -565,6 +568,28 @@ def build_constraint_family_text(family: Dict[str, Any]) -> str:
     if len(forall) > 0:
         txt += "   ∀ " + ", ".join(forall)
     return txt
+
+
+def abrir_expander_familia(r: int) -> None:
+    """Mantiene abierta la familia que se está editando después de cada rerun."""
+    st.session_state["constraint_family_expander_abierto"] = r
+
+
+def compact_family_title(pos: int, family: Dict[str, Any]) -> str:
+    """Título compacto para agrupar familias de restricciones en expanders."""
+    name = family.get("name", f"R{pos + 1}") or f"R{pos + 1}"
+    forall = family.get("forall", [])
+    lhs_terms = family.get("lhs_terms", [])
+    rhs_terms = family.get("rhs_terms", [])
+
+    if len(lhs_terms) == 0 and len(rhs_terms) == 0:
+        expr = "sin expresión definida"
+    else:
+        expr = build_constraint_family_text(family)
+
+    if len(forall) > 0:
+        return f"Familia {pos + 1}: {name} — {expr}"
+    return f"Familia {pos + 1}: {name} — {expr}"
 
 
 # ============================================================
@@ -1802,308 +1827,384 @@ elif section == "Definición del modelo":
 
             new_constraint_families = []
 
-            for r in range(int(num_families)):
-                st.markdown(f"### Familia de restricción {r+1}")
+            if int(num_families) == 0:
+                st.info("No hay familias de restricciones definidas.")
 
+            for r in range(int(num_families)):
                 old_family = old_constraint_families[r] if r < len(old_constraint_families) else None
 
-                c1, c2, c3 = st.columns([2, 2, 2])
+                default_name_preview = f"R{r+1}" if old_family is None else old_family.get("name", f"R{r+1}")
+                default_forall_preview = [] if old_family is None else old_family.get("forall", [])
+                default_sense_preview = "<=" if old_family is None else old_family.get("sense", "<=")
 
-                with c1:
-                    default_name = f"R{r+1}" if old_family is None else old_family.get("name", f"R{r+1}")
-                    family_name = st.text_input(
-                        f"Nombre de la familia {r+1}",
-                        value=default_name,
-                        key=f"constraint_family_name_{r}"
-                    ).strip()
-
-                with c2:
-                    default_forall = [] if old_family is None else old_family.get("forall", [])
-                    forall = st.multiselect(
-                        f"Índices para 'para todo' en {family_name or f'familia {r+1}'}",
-                        options=list(index_specs.keys()),
-                        default=default_forall,
-                        key=f"constraint_forall_{r}"
-                    )
-
-                with c3:
-                    default_sense = "<=" if old_family is None else old_family.get("sense", "<=")
-                    sense_family = st.selectbox(
-                        f"Operador en {family_name or f'familia {r+1}'}",
-                        options=["<=", ">=", "="],
-                        index=["<=", ">=", "="].index(default_sense),
-                        key=f"constraint_sense_{r}"
-                    )
-
-                if not is_valid_symbol(family_name):
-                    st.error(f"El nombre `{family_name}` no es válido.")
-                    continue
-
-                old_lhs_terms = [] if old_family is None else old_family.get("lhs_terms", [])
-                old_rhs_terms = [] if old_family is None else old_family.get("rhs_terms", [])
-
-                colL, colR = st.columns(2)
-
-                with colL:
-                    st.markdown(f"#### Lado izquierdo de {family_name}")
-
-                    num_lhs_terms = st.number_input(
-                        f"Número de términos LHS en {family_name}",
-                        min_value=0,
-                        max_value=10,
-                        value=len(old_lhs_terms),
-                        step=1,
-                        key=f"num_lhs_terms_{r}"
-                    )
-
-                    lhs_terms = []
-
-                    for t in range(int(num_lhs_terms)):
-                        st.markdown(f"**LHS término {t+1}**")
-                        old_term = old_lhs_terms[t] if t < len(old_lhs_terms) else None
-
-                        ca, cb, cc = st.columns([1, 2, 2])
-
-                        with ca:
-                            sign = st.selectbox(
-                                f"Signo LHS término {t+1} en {family_name}",
-                                options=["+", "-"],
-                                index=0 if old_term is None else (0 if old_term.get("sign", "+") == "+" else 1),
-                                key=f"lhs_sign_{r}_{t}"
-                            )
-
-                        with cb:
-                            num_factors = st.number_input(
-                                f"Número de factores LHS término {t+1} en {family_name}",
-                                min_value=1,
-                                max_value=4,
-                                value=2 if old_term is None else max(1, len(old_term.get('factors', []))),
-                                step=1,
-                                key=f"lhs_num_factors_{r}_{t}"
-                            )
-
-                        with cc:
-                            default_sum_over = [] if old_term is None else old_term.get("sum_over", [])
-                            sum_over = st.multiselect(
-                                f"Sumar sobre índices LHS término {t+1} en {family_name}",
-                                options=list(index_specs.keys()),
-                                default=default_sum_over,
-                                key=f"lhs_sum_over_{r}_{t}"
-                            )
-
-                        factors = []
-                        old_factors = [] if old_term is None else old_term.get("factors", [])
-
-                        for f in range(int(num_factors)):
-                            cfa, cfb, cfc = st.columns([1.5, 2.5, 2])
-
-                            old_factor = old_factors[f] if f < len(old_factors) else None
-                            default_factor_type = "object" if old_factor is None else old_factor.get("type", "object")
-
-                            with cfa:
-                                factor_type = st.selectbox(
-                                    f"Tipo LHS factor {f+1} término {t+1} en {family_name}",
-                                    options=["object", "constant"],
-                                    index=0 if default_factor_type == "object" else 1,
-                                    format_func=lambda x: "Parámetro/Variable" if x == "object" else "Constante",
-                                    key=f"lhs_factor_type_{r}_{t}_{f}"
-                                )
-
-                            if factor_type == "object":
-                                if len(expr_catalog_labels) == 0:
-                                    st.error("No hay parámetros ni variables disponibles.")
-                                else:
-                                    default_label = expr_catalog_labels[0]
-                                    if old_factor is not None and old_factor.get("type") == "object":
-                                        old_lbl = old_factor.get("label", default_label)
-                                        if old_lbl in expr_catalog_labels:
-                                            default_label = old_lbl
-
-                                    with cfb:
-                                        chosen_label = st.selectbox(
-                                            f"Objeto LHS factor {f+1} término {t+1} en {family_name}",
-                                            options=expr_catalog_labels,
-                                            index=expr_catalog_labels.index(default_label),
-                                            key=f"lhs_factor_object_{r}_{t}_{f}"
-                                        )
-
-                                    item = expr_label_to_item[chosen_label]
-                                    factors.append({
-                                        "type": "object",
-                                        "kind": item["kind"],
-                                        "name": item["name"],
-                                        "indices": item["indices"],
-                                        "label": item["label"]
-                                    })
-
-                                    with cfc:
-                                        st.write(f"Índices: {', '.join(item['indices']) if len(item['indices']) > 0 else 'ninguno'}")
-                            else:
-                                default_value = 0.0
-                                if old_factor is not None and old_factor.get("type") == "constant":
-                                    default_value = float(old_factor.get("value", 0.0))
-
-                                with cfb:
-                                    const_val = st.number_input(
-                                        f"Valor constante LHS factor {f+1} término {t+1} en {family_name}",
-                                        value=default_value,
-                                        key=f"lhs_factor_const_{r}_{t}_{f}"
-                                    )
-
-                                factors.append({
-                                    "type": "constant",
-                                    "value": float(const_val)
-                                })
-
-                        term_record = {
-                            "sign": sign,
-                            "factors": factors,
-                            "sum_over": sum_over
-                        }
-                        lhs_terms.append(term_record)
-                        st.latex(build_term_latex(term_record))
-
-                with colR:
-                    st.markdown(f"#### Lado derecho de {family_name}")
-
-                    num_rhs_terms = st.number_input(
-                        f"Número de términos RHS en {family_name}",
-                        min_value=0,
-                        max_value=10,
-                        value=len(old_rhs_terms),
-                        step=1,
-                        key=f"num_rhs_terms_{r}"
-                    )
-
-                    rhs_terms = []
-
-                    for t in range(int(num_rhs_terms)):
-                        st.markdown(f"**RHS término {t+1}**")
-                        old_term = old_rhs_terms[t] if t < len(old_rhs_terms) else None
-
-                        ca, cb, cc = st.columns([1, 2, 2])
-
-                        with ca:
-                            sign = st.selectbox(
-                                f"Signo RHS término {t+1} en {family_name}",
-                                options=["+", "-"],
-                                index=0 if old_term is None else (0 if old_term.get("sign", "+") == "+" else 1),
-                                key=f"rhs_sign_{r}_{t}"
-                            )
-
-                        with cb:
-                            num_factors = st.number_input(
-                                f"Número de factores RHS término {t+1} en {family_name}",
-                                min_value=1,
-                                max_value=4,
-                                value=1 if old_term is None else max(1, len(old_term.get('factors', []))),
-                                step=1,
-                                key=f"rhs_num_factors_{r}_{t}"
-                            )
-
-                        with cc:
-                            default_sum_over = [] if old_term is None else old_term.get("sum_over", [])
-                            sum_over = st.multiselect(
-                                f"Sumar sobre índices RHS término {t+1} en {family_name}",
-                                options=list(index_specs.keys()),
-                                default=default_sum_over,
-                                key=f"rhs_sum_over_{r}_{t}"
-                            )
-
-                        factors = []
-                        old_factors = [] if old_term is None else old_term.get("factors", [])
-
-                        for f in range(int(num_factors)):
-                            cfa, cfb, cfc = st.columns([1.5, 2.5, 2])
-
-                            old_factor = old_factors[f] if f < len(old_factors) else None
-                            default_factor_type = "constant" if old_factor is None else old_factor.get("type", "constant")
-
-                            with cfa:
-                                factor_type = st.selectbox(
-                                    f"Tipo RHS factor {f+1} término {t+1} en {family_name}",
-                                    options=["object", "constant"],
-                                    index=0 if default_factor_type == "object" else 1,
-                                    format_func=lambda x: "Parámetro/Variable" if x == "object" else "Constante",
-                                    key=f"rhs_factor_type_{r}_{t}_{f}"
-                                )
-
-                            if factor_type == "object":
-                                if len(expr_catalog_labels) == 0:
-                                    st.error("No hay parámetros ni variables disponibles.")
-                                else:
-                                    default_label = expr_catalog_labels[0]
-                                    if old_factor is not None and old_factor.get("type") == "object":
-                                        old_lbl = old_factor.get("label", default_label)
-                                        if old_lbl in expr_catalog_labels:
-                                            default_label = old_lbl
-
-                                    with cfb:
-                                        chosen_label = st.selectbox(
-                                            f"Objeto RHS factor {f+1} término {t+1} en {family_name}",
-                                            options=expr_catalog_labels,
-                                            index=expr_catalog_labels.index(default_label),
-                                            key=f"rhs_factor_object_{r}_{t}_{f}"
-                                        )
-
-                                    item = expr_label_to_item[chosen_label]
-                                    factors.append({
-                                        "type": "object",
-                                        "kind": item["kind"],
-                                        "name": item["name"],
-                                        "indices": item["indices"],
-                                        "label": item["label"]
-                                    })
-
-                                    with cfc:
-                                        st.write(f"Índices: {', '.join(item['indices']) if len(item['indices']) > 0 else 'ninguno'}")
-                            else:
-                                default_value = 0.0
-                                if old_factor is not None and old_factor.get("type") == "constant":
-                                    default_value = float(old_factor.get("value", 0.0))
-
-                                with cfb:
-                                    const_val = st.number_input(
-                                        f"Valor constante RHS factor {f+1} término {t+1} en {family_name}",
-                                        value=default_value,
-                                        key=f"rhs_factor_const_{r}_{t}_{f}"
-                                    )
-
-                                factors.append({
-                                    "type": "constant",
-                                    "value": float(const_val)
-                                })
-
-                        term_record = {
-                            "sign": sign,
-                            "factors": factors,
-                            "sum_over": sum_over
-                        }
-                        rhs_terms.append(term_record)
-                        st.latex(build_term_latex(term_record))
-
-                family_record = {
-                    "name": family_name,
-                    "forall": forall,
-                    "sense": sense_family,
-                    "lhs_terms": lhs_terms,
-                    "rhs_terms": rhs_terms
+                preview_family = dict(old_family) if old_family is not None else {
+                    "name": default_name_preview,
+                    "forall": default_forall_preview,
+                    "sense": default_sense_preview,
+                    "lhs_terms": [],
+                    "rhs_terms": []
                 }
+                preview_family["name"] = st.session_state.get(f"constraint_family_name_{r}", default_name_preview)
+                preview_family["forall"] = st.session_state.get(f"constraint_forall_{r}", default_forall_preview)
+                preview_family["sense"] = st.session_state.get(f"constraint_sense_{r}", default_sense_preview)
 
-                family_errors = validate_constraint_family(family_record)
+                expanded_now = (
+                    st.session_state.get("constraint_family_expander_abierto") == r
+                    or (st.session_state.get("constraint_family_expander_abierto") is None and r == 0)
+                )
 
-                st.markdown(f"### Vista previa de la familia {family_name}")
-                st.latex(build_constraint_family_latex(family_record))
+                with st.expander(compact_family_title(r, preview_family), expanded=expanded_now):
+                    st.markdown(f"### Configuración de la familia {r+1}")
 
-                if len(family_errors) > 0:
-                    for err in family_errors:
-                        st.error(err)
-                else:
-                    st.success("La familia de restricciones está estructuralmente consistente.")
+                    cf1, cf2, cf3 = st.columns([2, 2, 2])
 
-                new_constraint_families.append(family_record)
+                    with cf1:
+                        default_name = f"R{r+1}" if old_family is None else old_family.get("name", f"R{r+1}")
+                        family_name = st.text_input(
+                            f"Nombre de la familia {r+1}",
+                            value=default_name,
+                            key=f"constraint_family_name_{r}",
+                            on_change=abrir_expander_familia,
+                            args=(r,)
+                        ).strip()
+
+                    with cf2:
+                        default_forall = [] if old_family is None else old_family.get("forall", [])
+                        forall = st.multiselect(
+                            f"Índices para 'para todo' en {family_name or f'familia {r+1}'}",
+                            options=list(index_specs.keys()),
+                            default=default_forall,
+                            key=f"constraint_forall_{r}",
+                            on_change=abrir_expander_familia,
+                            args=(r,)
+                        )
+
+                    with cf3:
+                        default_sense = "<=" if old_family is None else old_family.get("sense", "<=")
+                        sense_family = st.selectbox(
+                            f"Operador en {family_name or f'familia {r+1}'}",
+                            options=["<=", ">=", "="],
+                            index=["<=", ">=", "="].index(default_sense),
+                            key=f"constraint_sense_{r}",
+                            on_change=abrir_expander_familia,
+                            args=(r,)
+                        )
+
+                    if not is_valid_symbol(family_name):
+                        st.error(f"El nombre `{family_name}` no es válido.")
+                        continue
+
+                    old_lhs_terms = [] if old_family is None else old_family.get("lhs_terms", [])
+                    old_rhs_terms = [] if old_family is None else old_family.get("rhs_terms", [])
+
+                    colL, colR = st.columns(2)
+
+                    with colL:
+                        st.markdown(f"#### Lado izquierdo de {family_name}")
+
+                        num_lhs_terms = st.number_input(
+                            f"Número de términos LHS en {family_name}",
+                            min_value=0,
+                            max_value=10,
+                            value=len(old_lhs_terms),
+                            step=1,
+                            key=f"num_lhs_terms_{r}",
+                            on_change=abrir_expander_familia,
+                            args=(r,)
+                        )
+
+                        lhs_terms = []
+
+                        for t in range(int(num_lhs_terms)):
+                            with st.expander(f"LHS término {t+1}", expanded=False):
+                                old_term = old_lhs_terms[t] if t < len(old_lhs_terms) else None
+
+                                ca, cb, cc = st.columns([1, 2, 2])
+
+                                with ca:
+                                    sign = st.selectbox(
+                                        f"Signo LHS término {t+1} en {family_name}",
+                                        options=["+", "-"],
+                                        index=0 if old_term is None else (0 if old_term.get("sign", "+") == "+" else 1),
+                                        key=f"lhs_sign_{r}_{t}",
+                                        on_change=abrir_expander_familia,
+                                        args=(r,)
+                                    )
+
+                                with cb:
+                                    num_factors = st.number_input(
+                                        f"Número de factores LHS término {t+1} en {family_name}",
+                                        min_value=1,
+                                        max_value=4,
+                                        value=2 if old_term is None else max(1, len(old_term.get('factors', []))),
+                                        step=1,
+                                        key=f"lhs_num_factors_{r}_{t}",
+                                        on_change=abrir_expander_familia,
+                                        args=(r,)
+                                    )
+
+                                with cc:
+                                    default_sum_over = [] if old_term is None else old_term.get("sum_over", [])
+                                    sum_over = st.multiselect(
+                                        f"Sumar sobre índices LHS término {t+1} en {family_name}",
+                                        options=list(index_specs.keys()),
+                                        default=default_sum_over,
+                                        key=f"lhs_sum_over_{r}_{t}",
+                                        on_change=abrir_expander_familia,
+                                        args=(r,)
+                                    )
+
+                                factors = []
+                                old_factors = [] if old_term is None else old_term.get("factors", [])
+
+                                for f in range(int(num_factors)):
+                                    cfa, cfb, cfc = st.columns([1.5, 2.5, 2])
+
+                                    old_factor = old_factors[f] if f < len(old_factors) else None
+                                    default_factor_type = "object" if old_factor is None else old_factor.get("type", "object")
+
+                                    with cfa:
+                                        factor_type = st.selectbox(
+                                            f"Tipo LHS factor {f+1} término {t+1} en {family_name}",
+                                            options=["object", "constant"],
+                                            index=0 if default_factor_type == "object" else 1,
+                                            format_func=lambda x: "Parámetro/Variable" if x == "object" else "Constante",
+                                            key=f"lhs_factor_type_{r}_{t}_{f}",
+                                            on_change=abrir_expander_familia,
+                                            args=(r,)
+                                        )
+
+                                    if factor_type == "object":
+                                        if len(expr_catalog_labels) == 0:
+                                            st.error("No hay parámetros ni variables disponibles.")
+                                        else:
+                                            default_label = expr_catalog_labels[0]
+                                            if old_factor is not None and old_factor.get("type") == "object":
+                                                old_lbl = old_factor.get("label", default_label)
+                                                if old_lbl in expr_catalog_labels:
+                                                    default_label = old_lbl
+
+                                            with cfb:
+                                                chosen_label = st.selectbox(
+                                                    f"Objeto LHS factor {f+1} término {t+1} en {family_name}",
+                                                    options=expr_catalog_labels,
+                                                    index=expr_catalog_labels.index(default_label),
+                                                    key=f"lhs_factor_object_{r}_{t}_{f}",
+                                                    on_change=abrir_expander_familia,
+                                                    args=(r,)
+                                                )
+
+                                            item = expr_label_to_item[chosen_label]
+                                            factors.append({
+                                                "type": "object",
+                                                "kind": item["kind"],
+                                                "name": item["name"],
+                                                "indices": item["indices"],
+                                                "label": item["label"]
+                                            })
+
+                                            with cfc:
+                                                st.write(f"Índices: {', '.join(item['indices']) if len(item['indices']) > 0 else 'ninguno'}")
+                                    else:
+                                        default_value = 0.0
+                                        if old_factor is not None and old_factor.get("type") == "constant":
+                                            default_value = float(old_factor.get("value", 0.0))
+
+                                        with cfb:
+                                            const_val = st.number_input(
+                                                f"Valor constante LHS factor {f+1} término {t+1} en {family_name}",
+                                                value=default_value,
+                                                key=f"lhs_factor_const_{r}_{t}_{f}",
+                                                on_change=abrir_expander_familia,
+                                                args=(r,)
+                                            )
+
+                                        factors.append({
+                                            "type": "constant",
+                                            "value": float(const_val)
+                                        })
+
+                                term_record = {
+                                    "sign": sign,
+                                    "factors": factors,
+                                    "sum_over": sum_over
+                                }
+                                lhs_terms.append(term_record)
+                                st.write("**Vista previa del término:**")
+                                st.latex(build_term_latex(term_record))
+
+                    with colR:
+                        st.markdown(f"#### Lado derecho de {family_name}")
+
+                        num_rhs_terms = st.number_input(
+                            f"Número de términos RHS en {family_name}",
+                            min_value=0,
+                            max_value=10,
+                            value=len(old_rhs_terms),
+                            step=1,
+                            key=f"num_rhs_terms_{r}",
+                            on_change=abrir_expander_familia,
+                            args=(r,)
+                        )
+
+                        rhs_terms = []
+
+                        for t in range(int(num_rhs_terms)):
+                            with st.expander(f"RHS término {t+1}", expanded=False):
+                                old_term = old_rhs_terms[t] if t < len(old_rhs_terms) else None
+
+                                ca, cb, cc = st.columns([1, 2, 2])
+
+                                with ca:
+                                    sign = st.selectbox(
+                                        f"Signo RHS término {t+1} en {family_name}",
+                                        options=["+", "-"],
+                                        index=0 if old_term is None else (0 if old_term.get("sign", "+") == "+" else 1),
+                                        key=f"rhs_sign_{r}_{t}",
+                                        on_change=abrir_expander_familia,
+                                        args=(r,)
+                                    )
+
+                                with cb:
+                                    num_factors = st.number_input(
+                                        f"Número de factores RHS término {t+1} en {family_name}",
+                                        min_value=1,
+                                        max_value=4,
+                                        value=1 if old_term is None else max(1, len(old_term.get('factors', []))),
+                                        step=1,
+                                        key=f"rhs_num_factors_{r}_{t}",
+                                        on_change=abrir_expander_familia,
+                                        args=(r,)
+                                    )
+
+                                with cc:
+                                    default_sum_over = [] if old_term is None else old_term.get("sum_over", [])
+                                    sum_over = st.multiselect(
+                                        f"Sumar sobre índices RHS término {t+1} en {family_name}",
+                                        options=list(index_specs.keys()),
+                                        default=default_sum_over,
+                                        key=f"rhs_sum_over_{r}_{t}",
+                                        on_change=abrir_expander_familia,
+                                        args=(r,)
+                                    )
+
+                                factors = []
+                                old_factors = [] if old_term is None else old_term.get("factors", [])
+
+                                for f in range(int(num_factors)):
+                                    cfa, cfb, cfc = st.columns([1.5, 2.5, 2])
+
+                                    old_factor = old_factors[f] if f < len(old_factors) else None
+                                    default_factor_type = "constant" if old_factor is None else old_factor.get("type", "constant")
+
+                                    with cfa:
+                                        factor_type = st.selectbox(
+                                            f"Tipo RHS factor {f+1} término {t+1} en {family_name}",
+                                            options=["object", "constant"],
+                                            index=0 if default_factor_type == "object" else 1,
+                                            format_func=lambda x: "Parámetro/Variable" if x == "object" else "Constante",
+                                            key=f"rhs_factor_type_{r}_{t}_{f}",
+                                            on_change=abrir_expander_familia,
+                                            args=(r,)
+                                        )
+
+                                    if factor_type == "object":
+                                        if len(expr_catalog_labels) == 0:
+                                            st.error("No hay parámetros ni variables disponibles.")
+                                        else:
+                                            default_label = expr_catalog_labels[0]
+                                            if old_factor is not None and old_factor.get("type") == "object":
+                                                old_lbl = old_factor.get("label", default_label)
+                                                if old_lbl in expr_catalog_labels:
+                                                    default_label = old_lbl
+
+                                            with cfb:
+                                                chosen_label = st.selectbox(
+                                                    f"Objeto RHS factor {f+1} término {t+1} en {family_name}",
+                                                    options=expr_catalog_labels,
+                                                    index=expr_catalog_labels.index(default_label),
+                                                    key=f"rhs_factor_object_{r}_{t}_{f}",
+                                                    on_change=abrir_expander_familia,
+                                                    args=(r,)
+                                                )
+
+                                            item = expr_label_to_item[chosen_label]
+                                            factors.append({
+                                                "type": "object",
+                                                "kind": item["kind"],
+                                                "name": item["name"],
+                                                "indices": item["indices"],
+                                                "label": item["label"]
+                                            })
+
+                                            with cfc:
+                                                st.write(f"Índices: {', '.join(item['indices']) if len(item['indices']) > 0 else 'ninguno'}")
+                                    else:
+                                        default_value = 0.0
+                                        if old_factor is not None and old_factor.get("type") == "constant":
+                                            default_value = float(old_factor.get("value", 0.0))
+
+                                        with cfb:
+                                            const_val = st.number_input(
+                                                f"Valor constante RHS factor {f+1} término {t+1} en {family_name}",
+                                                value=default_value,
+                                                key=f"rhs_factor_const_{r}_{t}_{f}",
+                                                on_change=abrir_expander_familia,
+                                                args=(r,)
+                                            )
+
+                                        factors.append({
+                                            "type": "constant",
+                                            "value": float(const_val)
+                                        })
+
+                                term_record = {
+                                    "sign": sign,
+                                    "factors": factors,
+                                    "sum_over": sum_over
+                                }
+                                rhs_terms.append(term_record)
+                                st.write("**Vista previa del término:**")
+                                st.latex(build_term_latex(term_record))
+
+                    family_record = {
+                        "name": family_name,
+                        "forall": forall,
+                        "sense": sense_family,
+                        "lhs_terms": lhs_terms,
+                        "rhs_terms": rhs_terms
+                    }
+
+                    family_errors = validate_constraint_family(family_record)
+
+                    st.markdown(f"### Vista previa de la familia {family_name}")
+                    st.latex(build_constraint_family_latex(family_record))
+
+                    if len(family_errors) > 0:
+                        for err in family_errors:
+                            st.error(err)
+                    else:
+                        st.success("La familia de restricciones está estructuralmente consistente.")
+
+                    new_constraint_families.append(family_record)
 
             spec["constraints"] = new_constraint_families
+
+            if len(spec["constraints"]) > 0:
+                st.markdown("---")
+                st.markdown("### Familias guardadas")
+                st.caption("Vista compacta para revisar el modelo sin tener todas las entradas abiertas.")
+
+                for i, fam in enumerate(spec["constraints"]):
+                    with st.expander(compact_family_title(i, fam), expanded=False):
+                        st.latex(build_constraint_family_latex(fam))
+                        st.write(f"**Nombre:** `{fam.get('name', f'R{i+1}')}`")
+                        st.write(f"**Operador:** `{fam.get('sense', '<=')}`")
+                        st.write(
+                            "**Para todo:** "
+                            + (", ".join(fam.get("forall", [])) if len(fam.get("forall", [])) > 0 else "sin índices libres")
+                        )
+
 
         # ====================================================
         # TAB RESUMEN LATEX
