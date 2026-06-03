@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import itertools
+import io
 from typing import Dict, List, Tuple, Any
 import pyomo.environ as pyo
 
@@ -354,6 +355,205 @@ def dataframe_nd_from_values_dict(
         row["value"] = float(values_dict.get(str(combo), 0.0))
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+# ============================================================
+# UTILIDADES PARA CARGA Y PERSISTENCIA DE PARÁMETROS
+# ============================================================
+
+def safe_float(value: Any, default: float = 0.0) -> float:
+    """
+    Convierte un valor a float de forma tolerante.
+    Si el usuario deja una celda vacía o con texto inválido, se usa default.
+    """
+    try:
+        if pd.isna(value):
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def normalize_parameter_values(
+    index_names: List[str],
+    index_specs: Dict[str, Dict[str, Any]],
+    values_dict: Dict[str, float] | None,
+) -> Dict[str, float]:
+    """
+    Asegura que el diccionario de valores tenga exactamente las claves requeridas
+    por la dimensión actual del parámetro. Esto evita reinicios inesperados cuando
+    se cambia de pestaña, se modifica un índice o se renombra un parámetro.
+    """
+    values_dict = values_dict or {}
+
+    if len(index_names) == 0:
+        return {"__scalar__": safe_float(values_dict.get("__scalar__", 0.0))}
+
+    combos = cartesian_labels(index_names, index_specs)
+    return {str(combo): safe_float(values_dict.get(str(combo), 0.0)) for combo in combos}
+
+
+def parameter_shape_token(
+    index_names: List[str],
+    index_specs: Dict[str, Dict[str, Any]],
+) -> str:
+    """
+    Token de estructura del parámetro. Si cambia la dimensión o los elementos
+    de los índices, se reinicializa el almacenamiento interno de ese parámetro.
+    """
+    structure = []
+    for idx in index_names:
+        structure.append((idx, tuple(index_specs[idx]["elements"])))
+    return repr((tuple(index_names), tuple(structure)))
+
+
+def ensure_parameter_value_store(
+    row_id: int,
+    index_names: List[str],
+    index_specs: Dict[str, Dict[str, Any]],
+    existing_values: Dict[str, float] | None,
+) -> str:
+    """
+    Crea o actualiza un almacén estable en session_state para los valores de
+    cada parámetro. La clave depende de la fila, no del nombre, para que al
+    renombrar el parámetro no se pierdan los valores digitados.
+    """
+    store_key = f"param_values_store_{row_id}"
+    shape_key = f"param_values_shape_{row_id}"
+    current_shape = parameter_shape_token(index_names, index_specs)
+
+    if store_key not in st.session_state or st.session_state.get(shape_key) != current_shape:
+        st.session_state[store_key] = normalize_parameter_values(index_names, index_specs, existing_values)
+        st.session_state[shape_key] = current_shape
+    else:
+        st.session_state[store_key] = normalize_parameter_values(
+            index_names,
+            index_specs,
+            st.session_state.get(store_key, {})
+        )
+
+    return store_key
+
+
+def parameter_values_to_dataframe(
+    index_names: List[str],
+    index_specs: Dict[str, Dict[str, Any]],
+    values_dict: Dict[str, float],
+) -> pd.DataFrame:
+    """Devuelve la tabla editable/plantilla correspondiente a un parámetro."""
+    values_dict = normalize_parameter_values(index_names, index_specs, values_dict)
+
+    if len(index_names) == 0:
+        return pd.DataFrame({"value": [safe_float(values_dict.get("__scalar__", 0.0))]})
+
+    if len(index_names) == 1:
+        labels = index_specs[index_names[0]]["elements"]
+        return dataframe_1d_from_values_dict(labels, values_dict)
+
+    combos = cartesian_labels(index_names, index_specs)
+    return dataframe_nd_from_values_dict(index_names, combos, values_dict)
+
+
+def dataframe_to_parameter_values(
+    df: pd.DataFrame,
+    index_names: List[str],
+    index_specs: Dict[str, Dict[str, Any]],
+) -> Dict[str, float]:
+    """Convierte una tabla editada o leída desde Excel al formato interno."""
+    if len(index_names) == 0:
+        if "value" not in df.columns or len(df) == 0:
+            raise ValueError("La plantilla escalar debe tener una columna 'value' con un valor.")
+        return {"__scalar__": safe_float(df["value"].iloc[0])}
+
+    if len(index_names) == 1:
+        if "label" not in df.columns or "value" not in df.columns:
+            raise ValueError("La plantilla debe tener las columnas 'label' y 'value'.")
+
+        idx = index_names[0]
+        expected_labels = [str(x) for x in index_specs[idx]["elements"]]
+        temp = df.copy()
+        temp["label"] = temp["label"].astype(str)
+
+        if temp["label"].duplicated().any():
+            duplicates = temp.loc[temp["label"].duplicated(), "label"].tolist()
+            raise ValueError(f"Hay etiquetas repetidas en el Excel: {duplicates}.")
+
+        present = set(temp["label"].tolist())
+        missing = [x for x in expected_labels if x not in present]
+        extra = [x for x in present if x not in set(expected_labels)]
+
+        if missing:
+            raise ValueError(f"Faltan etiquetas del índice {idx}: {missing}.")
+        if extra:
+            raise ValueError(f"El Excel contiene etiquetas que no pertenecen al índice {idx}: {extra}.")
+
+        out = {}
+        for lbl in expected_labels:
+            val = temp.loc[temp["label"] == lbl, "value"].iloc[0]
+            out[str((lbl,))] = safe_float(val)
+        return out
+
+    required_cols = list(index_names) + ["value"]
+    missing_cols = [c for c in required_cols if c not in df.columns]
+    if missing_cols:
+        raise ValueError(f"La plantilla debe tener estas columnas: {required_cols}. Faltan: {missing_cols}.")
+
+    temp = df.copy()
+    for idx in index_names:
+        temp[idx] = temp[idx].astype(str)
+
+    expected_combos = cartesian_labels(index_names, index_specs)
+    expected_set = set(expected_combos)
+    seen = []
+    out = {}
+
+    for _, row in temp.iterrows():
+        combo = tuple(str(row[idx]) for idx in index_names)
+        seen.append(combo)
+        if combo not in expected_set:
+            raise ValueError(f"El Excel contiene una combinación no válida: {combo}.")
+        out[str(combo)] = safe_float(row["value"])
+
+    seen_set = set(seen)
+    if len(seen) != len(seen_set):
+        duplicates = sorted([combo for combo in seen_set if seen.count(combo) > 1])
+        raise ValueError(f"Hay combinaciones repetidas en el Excel: {duplicates}.")
+
+    missing = [combo for combo in expected_combos if combo not in seen_set]
+    if missing:
+        raise ValueError(f"Faltan combinaciones en el Excel: {missing[:10]}{'...' if len(missing) > 10 else ''}.")
+
+    return normalize_parameter_values(index_names, index_specs, out)
+
+
+def safe_excel_sheet_name(name: str) -> str:
+    """Nombre de hoja compatible con Excel."""
+    invalid = ['\\\\', '/', '*', '?', ':', '[', ']']
+    out = name or "parametro"
+    for ch in invalid:
+        out = out.replace(ch, "_")
+    return out[:31] if len(out) > 31 else out
+
+
+def build_parameter_excel_template(
+    pname: str,
+    index_names: List[str],
+    index_specs: Dict[str, Dict[str, Any]],
+    values_dict: Dict[str, float],
+) -> bytes:
+    """
+    Genera un Excel con la estructura exacta que debe cargarse para el parámetro.
+    Incluye los valores actuales para que el archivo también sirva como respaldo.
+    """
+    df = parameter_values_to_dataframe(index_names, index_specs, values_dict)
+    buffer = io.BytesIO()
+
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name=safe_excel_sheet_name(pname), index=False)
+
+    buffer.seek(0)
+    return buffer.getvalue()
+
 
 
 def random_values_dict(
@@ -1304,7 +1504,8 @@ if section == "Ingreso de información":
     with tab_par:
         st.markdown(
             "<div class='section-box'><div class='section-subtitle'>Configuración de parámetros</div>"
-            "<div class='section-text'>Define parámetros escalares, vectores, matrices o tensores.</div></div>",
+            "<div class='section-text'>Define parámetros escalares, vectores, matrices o tensores. "
+            "Los valores se conservan en memoria mientras editas y también pueden cargarse desde Excel.</div></div>",
             unsafe_allow_html=True
         )
 
@@ -1328,11 +1529,16 @@ if section == "Ingreso de información":
 
             new_params_spec = {}
             index_name_options = list(index_specs.keys())
+            existing_param_names = list(current_params.keys())
+
+            st.info(
+                "Para parámetros grandes, lo más ordenado es descargar la plantilla, llenarla en Excel "
+                "y volverla a cargar. La columna de valores debe llamarse exactamente `value`."
+            )
 
             for p in range(int(num_params)):
                 st.markdown(f"#### Parámetro {p+1}")
 
-                existing_param_names = list(current_params.keys())
                 old_name = existing_param_names[p] if p < len(existing_param_names) else f"param_{p+1}"
 
                 col1, col2 = st.columns([2, 3])
@@ -1346,6 +1552,7 @@ if section == "Ingreso de información":
 
                 with col2:
                     default_indices = current_params.get(old_name, {}).get("indices", [])
+                    default_indices = [idx for idx in default_indices if idx in index_name_options]
                     p_indices = st.multiselect(
                         f"Índices de {pname or f'parámetro {p+1}'}",
                         options=index_name_options,
@@ -1367,7 +1574,9 @@ if section == "Ingreso de información":
                     f"**Número total de elementos:** `{num_elems}`"
                 )
 
-                mode_options = ["Manual", "Aleatorio"] if num_elems <= 12 else ["Aleatorio"]
+                # Para parámetros pequeños se permite digitación manual.
+                # Para parámetros grandes se recomienda Excel o generación aleatoria.
+                mode_options = ["Manual", "Excel", "Aleatorio"] if num_elems <= 12 else ["Excel", "Aleatorio"]
 
                 default_mode = current_params.get(old_name, {}).get("mode", mode_options[0])
                 if default_mode not in mode_options:
@@ -1382,139 +1591,149 @@ if section == "Ingreso de información":
                 )
 
                 existing_values = current_params.get(old_name, {}).get("values", {})
+                store_key = ensure_parameter_value_store(
+                    row_id=p,
+                    index_names=p_indices,
+                    index_specs=index_specs,
+                    existing_values=existing_values
+                )
+
+                current_values = st.session_state.get(store_key, {})
                 param_record = {
                     "indices": p_indices,
                     "mode": mode,
-                    "values": {},
+                    "values": current_values,
                 }
 
-                if len(p_indices) == 0:
-                    if mode == "Manual":
+                if mode == "Manual":
+                    if len(p_indices) == 0:
                         val = st.number_input(
                             f"Valor de {pname}",
-                            value=scalar_from_values_dict(existing_values, 0.0),
+                            value=scalar_from_values_dict(current_values, 0.0),
                             key=f"param_scalar_manual_{p}"
                         )
-                        param_record["values"] = values_dict_from_scalar(val)
+                        st.session_state[store_key] = values_dict_from_scalar(val)
                     else:
-                        c1, c2, c3, c4 = st.columns(4)
-                        with c1:
-                            low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_scalar_low_{p}")
-                        with c2:
-                            high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_scalar_high_{p}")
-                        with c3:
-                            integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_scalar_integer_{p}")
-                        with c4:
-                            seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_scalar_seed_{p}")
+                        df0 = parameter_values_to_dataframe(p_indices, index_specs, current_values)
+                        disabled_cols = ["label"] if len(p_indices) == 1 else list(p_indices)
+                        editor_key = f"param_manual_editor_{p}_{abs(hash(parameter_shape_token(p_indices, index_specs)))}"
 
-                        if low > high:
-                            st.error("El mínimo no puede ser mayor que el máximo.")
-                            continue
-
-                        if st.button(f"Generar {pname}", key=f"btn_generate_scalar_{p}"):
-                            st.session_state[f"generated_scalar_values_{pname}"] = random_scalar(
-                                low=low, high=high, integer_mode=integer_mode, seed=int(seed)
-                            )
-
-                        generated_values = st.session_state.get(
-                            f"generated_scalar_values_{pname}",
-                            existing_values if existing_values else random_scalar(low, high, integer_mode, int(seed))
-                        )
-                        param_record["values"] = generated_values
-                        st.write(f"Valor generado: **{scalar_from_values_dict(generated_values):.4f}**")
-
-                elif len(p_indices) == 1:
-                    idx = p_indices[0]
-                    labels = index_specs[idx]["elements"]
-
-                    if mode == "Manual":
-                        df0 = dataframe_1d_from_values_dict(labels, existing_values)
                         edited_df = st.data_editor(
                             df0,
                             use_container_width=True,
                             num_rows="fixed",
                             hide_index=True,
-                            disabled=["label"],
-                            key=f"param_manual_1d_{p}"
+                            disabled=disabled_cols,
+                            key=editor_key
                         )
-                        param_record["values"] = values_dict_from_dataframe_1d(edited_df, labels)
-                    else:
-                        c1, c2, c3, c4 = st.columns(4)
-                        with c1:
-                            low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_random_low_{p}")
-                        with c2:
-                            high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_random_high_{p}")
-                        with c3:
-                            integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_random_integer_{p}")
-                        with c4:
-                            seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_random_seed_{p}")
 
-                        if low > high:
-                            st.error("El mínimo no puede ser mayor que el máximo.")
-                            continue
-
-                        combos = cartesian_labels(p_indices, index_specs)
-
-                        if st.button(f"Generar valores de {pname}", key=f"btn_generate_{p}"):
-                            st.session_state[f"generated_values_{pname}"] = random_values_dict(
-                                combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                        try:
+                            st.session_state[store_key] = dataframe_to_parameter_values(
+                                edited_df,
+                                p_indices,
+                                index_specs
                             )
+                        except Exception as e:
+                            st.error(f"No se pudieron leer los valores digitados para `{pname}`: {e}")
 
-                        generated_values = st.session_state.get(
-                            f"generated_values_{pname}",
-                            existing_values if existing_values else random_values_dict(
-                                combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
-                            )
+                    param_record["values"] = st.session_state[store_key]
+
+                elif mode == "Excel":
+                    st.markdown("**Carga desde Excel**")
+                    st.caption(
+                        "Descarga la plantilla, llena únicamente la columna `value` y vuelve a cargar el archivo. "
+                        "No cambies los nombres de las columnas de índices."
+                    )
+
+                    col_down, col_up = st.columns([1, 2])
+
+                    with col_down:
+                        template_bytes = build_parameter_excel_template(
+                            pname,
+                            p_indices,
+                            index_specs,
+                            current_values
                         )
-                        param_record["values"] = generated_values
-                        preview_df = dataframe_1d_from_values_dict(labels, generated_values)
-                        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                        st.download_button(
+                            label=f"Descargar plantilla de {pname}",
+                            data=template_bytes,
+                            file_name=f"plantilla_{pname}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"download_template_{p}"
+                        )
+
+                    with col_up:
+                        uploaded_param_file = st.file_uploader(
+                            f"Cargar Excel para {pname}",
+                            type=["xlsx", "xls"],
+                            key=f"upload_param_excel_{p}"
+                        )
+
+                    if uploaded_param_file is not None:
+                        try:
+                            uploaded_df = pd.read_excel(uploaded_param_file)
+                            imported_values = dataframe_to_parameter_values(
+                                uploaded_df,
+                                p_indices,
+                                index_specs
+                            )
+                            st.session_state[store_key] = imported_values
+                            st.success(f"Valores de `{pname}` cargados correctamente desde Excel.")
+                        except Exception as e:
+                            st.error(f"No se pudo cargar el Excel de `{pname}`: {e}")
+
+                    param_record["values"] = st.session_state[store_key]
+                    st.write("**Vista previa de valores actuales**")
+                    st.dataframe(
+                        parameter_values_to_dataframe(p_indices, index_specs, st.session_state[store_key]),
+                        use_container_width=True,
+                        hide_index=True
+                    )
 
                 else:
-                    combos = cartesian_labels(p_indices, index_specs)
+                    c1, c2, c3, c4 = st.columns(4)
+                    with c1:
+                        low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_random_low_{p}")
+                    with c2:
+                        high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_random_high_{p}")
+                    with c3:
+                        integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_random_integer_{p}")
+                    with c4:
+                        seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_random_seed_{p}")
 
-                    if mode == "Manual":
-                        df0 = dataframe_nd_from_values_dict(p_indices, combos, existing_values)
-                        edited_df = st.data_editor(
-                            df0,
-                            use_container_width=True,
-                            num_rows="fixed",
-                            hide_index=True,
-                            disabled=list(p_indices),
-                            key=f"param_manual_nd_{p}"
-                        )
-                        param_record["values"] = values_dict_from_dataframe_nd(edited_df, p_indices)
-                    else:
-                        c1, c2, c3, c4 = st.columns(4)
-                        with c1:
-                            low = st.number_input(f"Mínimo {pname}", value=0.0, key=f"param_random_low_{p}")
-                        with c2:
-                            high = st.number_input(f"Máximo {pname}", value=10.0, key=f"param_random_high_{p}")
-                        with c3:
-                            integer_mode = st.checkbox(f"Entero {pname}", value=False, key=f"param_random_integer_{p}")
-                        with c4:
-                            seed = st.number_input(f"Semilla {pname}", value=123, step=1, key=f"param_random_seed_{p}")
+                    if low > high:
+                        st.error("El mínimo no puede ser mayor que el máximo.")
+                        continue
 
-                        if low > high:
-                            st.error("El mínimo no puede ser mayor que el máximo.")
-                            continue
-
-                        if st.button(f"Generar valores de {pname}", key=f"btn_generate_nd_{p}"):
-                            st.session_state[f"generated_values_{pname}"] = random_values_dict(
-                                combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
+                    if st.button(f"Generar valores de {pname}", key=f"btn_generate_values_{p}"):
+                        if len(p_indices) == 0:
+                            st.session_state[store_key] = random_scalar(
+                                low=low,
+                                high=high,
+                                integer_mode=integer_mode,
+                                seed=int(seed)
+                            )
+                        else:
+                            combos = cartesian_labels(p_indices, index_specs)
+                            st.session_state[store_key] = random_values_dict(
+                                combos=combos,
+                                low=low,
+                                high=high,
+                                integer_mode=integer_mode,
+                                seed=int(seed)
                             )
 
-                        generated_values = st.session_state.get(
-                            f"generated_values_{pname}",
-                            existing_values if existing_values else random_values_dict(
-                                combos=combos, low=low, high=high, integer_mode=integer_mode, seed=int(seed)
-                            )
-                        )
-                        param_record["values"] = generated_values
-                        preview_df = dataframe_nd_from_values_dict(p_indices, combos, generated_values)
-                        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                    param_record["values"] = st.session_state[store_key]
+                    st.write("**Vista previa de valores generados/actuales**")
+                    st.dataframe(
+                        parameter_values_to_dataframe(p_indices, index_specs, st.session_state[store_key]),
+                        use_container_width=True,
+                        hide_index=True
+                    )
 
                 new_params_spec[pname] = param_record
+
+                st.markdown("---")
 
             st.session_state["model_spec"]["parameters"] = new_params_spec
 
