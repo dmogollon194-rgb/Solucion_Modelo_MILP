@@ -64,6 +64,8 @@ def _init():
         st.session_state["model_spec"] = _EMPTY_SPEC.copy()
     if "constraint_family_expander_abierto" not in st.session_state:
         st.session_state["constraint_family_expander_abierto"] = None
+    if "parameter_expander_abierto" not in st.session_state:
+        st.session_state["parameter_expander_abierto"] = None
 
 _init()
 spec = st.session_state["model_spec"]
@@ -674,6 +676,9 @@ def object_catalog(spec: dict) -> tuple[list[dict], dict]:
 def _open_family(r: int):
     st.session_state["constraint_family_expander_abierto"] = r
 
+def _open_parameter(p: int):
+    st.session_state["parameter_expander_abierto"] = p
+
 # ============================================================
 # SIDEBAR
 # ============================================================
@@ -782,132 +787,185 @@ if section == "Ingreso de información":
             ))
             idx_opts = list(idx_specs.keys())
             new_params = {}
+            old_names = list(cur.keys())
+
+            if n_p == 0:
+                st.info("Sin parámetros definidos.")
 
             for p in range(n_p):
-                st.markdown(f"#### Parámetro {p+1}")
-                old_names = list(cur.keys())
                 old_name = old_names[p] if p < len(old_names) else f"param_{p+1}"
+                old_record = cur.get(old_name, {})
+                default_indices = old_record.get("indices", [])
 
-                col1, col2 = st.columns([2, 3])
-                pname = col1.text_input(
-                    f"Nombre {p+1}",
-                    value=old_name,
-                    key=f"pname_{p}"
-                ).strip()
-                p_idxs = col2.multiselect(
-                    f"Índices de {pname}",
-                    idx_opts,
-                    default=cur.get(old_name, {}).get("indices", []),
-                    key=f"pidxs_{p}"
+                preview_name = st.session_state.get(f"pname_{p}", old_name)
+                preview_indices = st.session_state.get(f"pidxs_{p}", default_indices)
+                preview_indices = [idx for idx in preview_indices if idx in idx_specs]
+                preview_ne = total_elems(preview_indices, idx_specs)
+
+                preview_modes = ["Manual", "Excel/CSV", "Aleatorio"] if preview_ne <= 12 else ["Excel/CSV", "Aleatorio"]
+                preview_mode = st.session_state.get(f"pmode_{p}", old_record.get("mode", preview_modes[0]))
+                if preview_mode == "Excel":
+                    preview_mode = "Excel/CSV"
+                if preview_mode not in preview_modes:
+                    preview_mode = preview_modes[0]
+
+                preview_label = (
+                    f"Parámetro {p+1}: {preview_name} — "
+                    f"{sig(preview_name, preview_indices)} — "
+                    f"{preview_ne} elemento(s) — {preview_mode}"
+                )
+                expanded = (
+                    st.session_state.get("parameter_expander_abierto") == p or
+                    (st.session_state.get("parameter_expander_abierto") is None and p == 0)
                 )
 
-                if not valid_sym(pname):
-                    st.error(f"`{pname}` no válido.")
-                    continue
-                if pname in new_params:
-                    st.error(f"`{pname}` repetido.")
-                    continue
+                with st.expander(preview_label, expanded=expanded):
+                    st.markdown(f"### Parámetro {p+1}")
+                    col1, col2 = st.columns([2, 3])
+                    pname = col1.text_input(
+                        f"Nombre del parámetro {p+1}",
+                        value=old_name,
+                        key=f"pname_{p}",
+                        on_change=_open_parameter,
+                        args=(p,)
+                    ).strip()
+                    p_idxs = col2.multiselect(
+                        f"Índices de {pname}",
+                        idx_opts,
+                        default=default_indices,
+                        key=f"pidxs_{p}",
+                        on_change=_open_parameter,
+                        args=(p,)
+                    )
 
-                ne = total_elems(p_idxs, idx_specs)
-                st.write(f"**Firma:** `{sig(pname, p_idxs)}` — **Elementos:** `{ne}`")
+                    if not valid_sym(pname):
+                        st.error(f"`{pname}` no válido.")
+                        continue
+                    if pname in new_params:
+                        st.error(f"`{pname}` repetido.")
+                        continue
 
-                modes = ["Manual", "Excel/CSV", "Aleatorio"] if ne <= 12 else ["Excel/CSV", "Aleatorio"]
-                old_mode = cur.get(old_name, {}).get("mode", modes[0])
-                if old_mode == "Excel":
-                    old_mode = "Excel/CSV"
-                if old_mode not in modes:
-                    old_mode = modes[0]
+                    ne = total_elems(p_idxs, idx_specs)
+                    st.write(f"**Firma:** `{sig(pname, p_idxs)}`")
+                    st.write(f"**Número total de elementos:** `{ne}`")
 
-                mode = st.radio(
-                    f"Modo de carga para {pname}",
-                    modes,
-                    index=modes.index(old_mode),
-                    horizontal=True,
-                    key=f"pmode_{p}"
-                )
+                    modes = ["Manual", "Excel/CSV", "Aleatorio"] if ne <= 12 else ["Excel/CSV", "Aleatorio"]
+                    old_mode = old_record.get("mode", modes[0])
+                    if old_mode == "Excel":
+                        old_mode = "Excel/CSV"
+                    if old_mode not in modes:
+                        old_mode = modes[0]
 
-                old_vals = cur.get(old_name, {}).get("values", {})
-                current_values = _initial_param_values(p, pname, p_idxs, idx_specs, old_vals)
-                record = {"indices": p_idxs, "mode": mode, "values": dict(current_values)}
+                    mode = st.radio(
+                        f"Modo de carga para {pname}",
+                        modes,
+                        index=modes.index(old_mode),
+                        horizontal=True,
+                        key=f"pmode_{p}",
+                        on_change=_open_parameter,
+                        args=(p,)
+                    )
 
-                if mode == "Manual":
-                    if not p_idxs:
-                        value = st.number_input(
-                            f"Valor {pname}",
-                            value=scalar_get(current_values),
-                            key=f"pscalar_{p}"
-                        )
-                        record["values"] = _set_param_values(p, scalar_set(value))
+                    old_vals = old_record.get("values", {})
+                    current_values = _initial_param_values(p, pname, p_idxs, idx_specs, old_vals)
+                    record = {"indices": p_idxs, "mode": mode, "values": dict(current_values)}
 
-                    elif len(p_idxs) == 1:
-                        labels = idx_specs[p_idxs[0]]["elements"]
-                        df0 = vals_to_df1d(labels, current_values)
-                        edited = st.data_editor(
-                            df0,
-                            use_container_width=True,
-                            num_rows="fixed",
-                            hide_index=True,
-                            disabled=["label"],
-                            key=f"pman1d_{p}_{_param_signature_key(pname, p_idxs)}"
-                        )
-                        values = {str((str(row["label"]),)): float(row["value"]) for _, row in edited.iterrows()}
-                        record["values"] = _set_param_values(p, values)
+                    if mode == "Manual":
+                        if not p_idxs:
+                            value = st.number_input(
+                                f"Valor {pname}",
+                                value=scalar_get(current_values),
+                                key=f"pscalar_{p}",
+                                on_change=_open_parameter,
+                                args=(p,)
+                            )
+                            record["values"] = _set_param_values(p, scalar_set(value))
 
-                    else:
-                        clist = combos(p_idxs, idx_specs)
-                        df0 = vals_to_df(p_idxs, clist, current_values)
-                        edited = st.data_editor(
-                            df0,
-                            use_container_width=True,
-                            num_rows="fixed",
-                            hide_index=True,
-                            disabled=list(p_idxs),
-                            key=f"pmannd_{p}_{_param_signature_key(pname, p_idxs)}"
-                        )
-                        record["values"] = _set_param_values(p, df_to_vals(edited, p_idxs))
+                        elif len(p_idxs) == 1:
+                            labels = idx_specs[p_idxs[0]]["elements"]
+                            df0 = vals_to_df1d(labels, current_values)
+                            edited = st.data_editor(
+                                df0,
+                                use_container_width=True,
+                                num_rows="fixed",
+                                hide_index=True,
+                                disabled=["label"],
+                                key=f"pman1d_{p}_{_param_signature_key(pname, p_idxs)}",
+                                on_change=_open_parameter,
+                                args=(p,)
+                            )
+                            values = {str((str(row["label"]),)): float(row["value"]) for _, row in edited.iterrows()}
+                            record["values"] = _set_param_values(p, values)
 
-                elif mode == "Excel/CSV":
-                    record["values"] = parameter_template_controls(p, pname, p_idxs, idx_specs, current_values)
+                        else:
+                            clist = combos(p_idxs, idx_specs)
+                            df0 = vals_to_df(p_idxs, clist, current_values)
+                            edited = st.data_editor(
+                                df0,
+                                use_container_width=True,
+                                num_rows="fixed",
+                                hide_index=True,
+                                disabled=list(p_idxs),
+                                key=f"pmannd_{p}_{_param_signature_key(pname, p_idxs)}",
+                                on_change=_open_parameter,
+                                args=(p,)
+                            )
+                            record["values"] = _set_param_values(p, df_to_vals(edited, p_idxs))
 
-                else:  # Aleatorio
-                    if not p_idxs:
-                        lo, hi, intg, seed = _rand_controls(f"ps_{p}")
-                        if lo > hi:
-                            st.error("Mínimo > máximo.")
-                            continue
-                        if st.button(f"Generar {pname}", key=f"pgen_{p}"):
-                            current_values = _set_param_values(p, rand_scalar(lo, hi, intg, seed))
-                        st.write(f"Valor: **{scalar_get(current_values):.4f}**")
-                        record["values"] = dict(current_values)
+                    elif mode == "Excel/CSV":
+                        record["values"] = parameter_template_controls(p, pname, p_idxs, idx_specs, current_values)
 
-                    else:
-                        lo, hi, intg, seed = _rand_controls(f"prand_{p}")
-                        if lo > hi:
-                            st.error("Mínimo > máximo.")
-                            continue
-                        clist = combos(p_idxs, idx_specs)
-                        if st.button(f"Generar valores de {pname}", key=f"pgen_{p}"):
-                            current_values = _set_param_values(p, rand_vals(clist, lo, hi, intg, seed))
-                        record["values"] = dict(current_values)
+                    else:  # Aleatorio
+                        if not p_idxs:
+                            lo, hi, intg, seed = _rand_controls(f"ps_{p}")
+                            if lo > hi:
+                                st.error("Mínimo > máximo.")
+                                continue
+                            if st.button(f"Generar {pname}", key=f"pgen_{p}", on_click=_open_parameter, args=(p,)):
+                                current_values = _set_param_values(p, rand_scalar(lo, hi, intg, seed))
+                            st.write(f"Valor: **{scalar_get(current_values):.4f}**")
+                            record["values"] = dict(current_values)
+
+                        else:
+                            lo, hi, intg, seed = _rand_controls(f"prand_{p}")
+                            if lo > hi:
+                                st.error("Mínimo > máximo.")
+                                continue
+                            clist = combos(p_idxs, idx_specs)
+                            if st.button(f"Generar valores de {pname}", key=f"pgen_{p}", on_click=_open_parameter, args=(p,)):
+                                current_values = _set_param_values(p, rand_vals(clist, lo, hi, intg, seed))
+                            record["values"] = dict(current_values)
+                            st.dataframe(
+                                template_df_for_parameter(p_idxs, idx_specs, record["values"]),
+                                use_container_width=True,
+                                hide_index=True
+                            )
+
+                    st.markdown("#### Vista previa del parámetro")
+                    st.dataframe(
+                        template_df_for_parameter(p_idxs, idx_specs, record["values"]),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    new_params[pname] = record
+
+            spec["parameters"] = new_params
+
+            if new_params:
+                st.markdown("---")
+                st.markdown("### Parámetros guardados")
+                for i, (name, param) in enumerate(new_params.items()):
+                    title = (
+                        f"Parámetro {i+1}: {sig(name, param['indices'])} — "
+                        f"{total_elems(param['indices'], idx_specs)} elemento(s) — {param['mode']}"
+                    )
+                    with st.expander(title, expanded=False):
                         st.dataframe(
-                            template_df_for_parameter(p_idxs, idx_specs, record["values"]),
+                            template_df_for_parameter(param["indices"], idx_specs, param["values"]),
                             use_container_width=True,
                             hide_index=True
                         )
-
-                new_params[pname] = record
-
-            spec["parameters"] = new_params
-            if new_params:
-                st.write("**Resumen:**")
-                st.dataframe(pd.DataFrame([
-                    {
-                        "Parámetro": sig(n, v["indices"]),
-                        "Modo": v["mode"],
-                        "Elementos": total_elems(v["indices"], idx_specs)
-                    }
-                    for n, v in new_params.items()
-                ]), use_container_width=True, hide_index=True)
 
     # -- VARIABLES --
     with tab_var:
