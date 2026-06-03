@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import itertools
+import io
 from typing import Any
 import pyomo.environ as pyo
 
@@ -132,6 +133,241 @@ def rand_scalar(lo: float, hi: float, integer: bool, seed: int) -> dict:
     v = int(rng.integers(int(lo), int(hi) + 1)) if integer else float(rng.uniform(lo, hi))
     return {"__scalar__": float(v)}
 
+
+# ============================================================
+# UTILITIES — PARAMETER PERSISTENCE + EXCEL/CSV
+# ============================================================
+def _param_store_key(row_pos: int) -> str:
+    return f"_param_values_store_{row_pos}"
+
+
+def _param_signature_key(pname: str, idx_names: list[str]) -> str:
+    return f"{pname}__{'_'.join(idx_names) if idx_names else 'scalar'}"
+
+
+def _empty_values_for_parameter(idx_names: list[str], idx_specs: dict) -> dict:
+    if not idx_names:
+        return {"__scalar__": 0.0}
+    return {str(c): 0.0 for c in combos(idx_names, idx_specs)}
+
+
+def _values_match_structure(values: dict, idx_names: list[str], idx_specs: dict) -> bool:
+    if not isinstance(values, dict):
+        return False
+    if not idx_names:
+        return "__scalar__" in values
+    expected = {str(c) for c in combos(idx_names, idx_specs)}
+    return expected.issubset(set(values.keys()))
+
+
+def _initial_param_values(row_pos: int, pname: str, idx_names: list[str], idx_specs: dict, old_vals: dict) -> dict:
+    """Devuelve valores persistentes compatibles con la estructura actual del parámetro."""
+    store_key = _param_store_key(row_pos)
+
+    # 1) Prioridad: valores vivos del editor en session_state.
+    stored = st.session_state.get(store_key)
+    if _values_match_structure(stored, idx_names, idx_specs):
+        return dict(stored)
+
+    # 2) Luego: valores guardados en el spec anterior.
+    if _values_match_structure(old_vals, idx_names, idx_specs):
+        st.session_state[store_key] = dict(old_vals)
+        return dict(old_vals)
+
+    # 3) Si cambió la dimensionalidad, inicializa en cero con la nueva estructura.
+    fresh = _empty_values_for_parameter(idx_names, idx_specs)
+    st.session_state[store_key] = dict(fresh)
+    return fresh
+
+
+def _set_param_values(row_pos: int, values: dict) -> dict:
+    st.session_state[_param_store_key(row_pos)] = dict(values)
+    return dict(values)
+
+
+def template_df_for_parameter(idx_names: list[str], idx_specs: dict, current_values: dict) -> pd.DataFrame:
+    if not idx_names:
+        return pd.DataFrame([{"value": scalar_get(current_values, 0.0)}])
+    if len(idx_names) == 1:
+        return vals_to_df1d(idx_specs[idx_names[0]]["elements"], current_values)
+    return vals_to_df(idx_names, combos(idx_names, idx_specs), current_values)
+
+
+def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8-sig")
+
+
+def dataframe_to_xlsx_bytes(df: pd.DataFrame) -> bytes | None:
+    """Crea XLSX solo si xlsxwriter está instalado; si no, retorna None sin romper la app."""
+    buffer = io.BytesIO()
+    try:
+        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+            df.to_excel(writer, index=False, sheet_name="parametro")
+        return buffer.getvalue()
+    except Exception:
+        return None
+
+
+def read_parameter_upload(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
+    name = uploaded_file.name.lower()
+    try:
+        if name.endswith(".csv"):
+            return pd.read_csv(uploaded_file), None
+        if name.endswith((".xlsx", ".xls")):
+            try:
+                return pd.read_excel(uploaded_file), None
+            except ImportError:
+                return None, "Para cargar archivos .xlsx instala `openpyxl` o carga la plantilla en formato .csv."
+            except ModuleNotFoundError:
+                return None, "Para cargar archivos .xlsx instala `openpyxl` o carga la plantilla en formato .csv."
+        return None, "Formato no soportado. Usa .csv o .xlsx."
+    except Exception as exc:
+        return None, f"No se pudo leer el archivo: {exc}"
+
+
+def validate_and_convert_parameter_df(df: pd.DataFrame, idx_names: list[str], idx_specs: dict) -> tuple[dict | None, list[str]]:
+    errors: list[str] = []
+    if df is None or df.empty:
+        return None, ["El archivo está vacío."]
+
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    if "value" not in df.columns:
+        errors.append("Debe existir una columna llamada exactamente `value`.")
+        return None, errors
+
+    try:
+        df["value"] = pd.to_numeric(df["value"], errors="raise")
+    except Exception:
+        errors.append("La columna `value` solo debe contener valores numéricos.")
+        return None, errors
+
+    if not idx_names:
+        if len(df) < 1:
+            errors.append("El parámetro escalar necesita al menos una fila con la columna `value`.")
+            return None, errors
+        return {"__scalar__": float(df.iloc[0]["value"])}, []
+
+    if len(idx_names) == 1:
+        idx = idx_names[0]
+        index_col = "label" if "label" in df.columns else idx if idx in df.columns else None
+        if index_col is None:
+            errors.append(f"Debe existir una columna `label` o una columna `{idx}`.")
+            return None, errors
+
+        work = df[[index_col, "value"]].copy()
+        work[index_col] = work[index_col].astype(str)
+
+        if work[index_col].duplicated().any():
+            repeated = work.loc[work[index_col].duplicated(), index_col].unique().tolist()
+            errors.append(f"Hay etiquetas repetidas: {repeated}.")
+
+        expected = set(idx_specs[idx]["elements"])
+        observed = set(work[index_col].tolist())
+        missing = sorted(expected - observed)
+        observed_extra = sorted(observed - expected)
+        if missing:
+            errors.append(f"Faltan etiquetas del índice `{idx}`: {missing}.")
+        if observed_extra:
+            errors.append(f"Hay etiquetas que no pertenecen al índice `{idx}`: {observed_extra}.")
+        if errors:
+            return None, errors
+
+        values = {}
+        for _, row in work.iterrows():
+            values[str((str(row[index_col]),))] = float(row["value"])
+        return values, []
+
+    required_cols = idx_names + ["value"]
+    missing_cols = [c for c in required_cols if c not in df.columns]
+    if missing_cols:
+        errors.append(f"Faltan columnas requeridas: {missing_cols}.")
+        return None, errors
+
+    work = df[required_cols].copy()
+    for idx in idx_names:
+        work[idx] = work[idx].astype(str)
+
+    if work.duplicated(subset=idx_names).any():
+        repeated_rows = work.loc[work.duplicated(subset=idx_names), idx_names].drop_duplicates().to_dict("records")
+        errors.append(f"Hay combinaciones repetidas: {repeated_rows}.")
+
+    expected = set(combos(idx_names, idx_specs))
+    observed = set(tuple(row[idx] for idx in idx_names) for _, row in work.iterrows())
+    missing = sorted(expected - observed)
+    extra = sorted(observed - expected)
+    if missing:
+        errors.append(f"Faltan combinaciones de índices: {missing}.")
+    if extra:
+        errors.append(f"Hay combinaciones que no pertenecen a los índices definidos: {extra}.")
+    if errors:
+        return None, errors
+
+    values = {}
+    for _, row in work.iterrows():
+        key = tuple(str(row[idx]) for idx in idx_names)
+        values[str(key)] = float(row["value"])
+    return values, []
+
+
+def parameter_template_controls(row_pos: int, pname: str, idx_names: list[str], idx_specs: dict, current_values: dict):
+    df_template = template_df_for_parameter(idx_names, idx_specs, current_values)
+    file_base = f"plantilla_{pname}"
+    widget_suffix = _param_signature_key(pname, idx_names)
+
+    st.caption("Descarga la plantilla, llena únicamente la columna `value` y vuelve a cargar el archivo. No cambies los nombres de las columnas de índices.")
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            "Descargar plantilla CSV",
+            data=dataframe_to_csv_bytes(df_template),
+            file_name=f"{file_base}.csv",
+            mime="text/csv",
+            key=f"tmpl_csv_{row_pos}_{widget_suffix}",
+        )
+    with dl2:
+        xlsx_bytes = dataframe_to_xlsx_bytes(df_template)
+        if xlsx_bytes is not None:
+            st.download_button(
+                "Descargar plantilla Excel",
+                data=xlsx_bytes,
+                file_name=f"{file_base}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"tmpl_xlsx_{row_pos}_{widget_suffix}",
+            )
+        else:
+            st.info("Para descargar .xlsx instala `xlsxwriter`. La plantilla CSV funciona en Excel.")
+
+    uploaded = st.file_uploader(
+        f"Cargar valores para {pname}",
+        type=["csv", "xlsx", "xls"],
+        key=f"upload_param_{row_pos}_{widget_suffix}",
+    )
+
+    if uploaded is None:
+        st.dataframe(df_template, use_container_width=True, hide_index=True)
+        return current_values
+
+    df_uploaded, read_error = read_parameter_upload(uploaded)
+    if read_error:
+        st.error(read_error)
+        st.dataframe(df_template, use_container_width=True, hide_index=True)
+        return current_values
+
+    values, errors = validate_and_convert_parameter_df(df_uploaded, idx_names, idx_specs)
+    if errors:
+        for err in errors:
+            st.error(err)
+        st.write("Vista del archivo cargado:")
+        st.dataframe(df_uploaded, use_container_width=True, hide_index=True)
+        return current_values
+
+    st.success("Valores cargados correctamente.")
+    _set_param_values(row_pos, values)
+    st.dataframe(template_df_for_parameter(idx_names, idx_specs, values), use_container_width=True, hide_index=True)
+    return values
+
 # ============================================================
 # UTILITIES — EXPRESSIONS
 # ============================================================
@@ -230,6 +466,26 @@ def validate_linearity(spec: dict) -> list[str]:
 # UTILITIES — PYOMO
 # ============================================================
 _DOMAINS = {"Binary": pyo.Binary, "NonNegativeReals": pyo.NonNegativeReals, "NonNegativeIntegers": pyo.NonNegativeIntegers}
+
+SOLVER_OPTIONS = {
+    "HiGHS (appsi_highs)": "appsi_highs",
+    "GLPK": "glpk",
+    "CBC": "cbc",
+}
+
+
+def solver_factory_from_label(label: str):
+    solver_name = SOLVER_OPTIONS.get(label)
+    if solver_name is None:
+        raise ValueError(f"Solver no soportado: {label}")
+    solver = pyo.SolverFactory(solver_name)
+    try:
+        available = solver.available(exception_flag=False)
+    except TypeError:
+        available = solver.available()
+    if not available:
+        raise RuntimeError(f"El solver `{solver_name}` no está disponible en este entorno.")
+    return solver_name, solver
 
 def _get_val(model, f: dict, env: dict):
     if f["type"] == "constant":
@@ -506,14 +762,24 @@ if section == "Ingreso de información":
 
     # -- PARÁMETROS --
     with tab_par:
-        section_box("Configuración de parámetros", "Escalares, vectores, matrices o tensores.")
+        section_box(
+            "Configuración de parámetros",
+            "Define parámetros manualmente, por carga desde Excel/CSV o con generación aleatoria."
+        )
         idx_specs = spec["indices"]
 
         if not idx_specs:
             st.info("Primero define índices válidos.")
         else:
             cur = spec["parameters"]
-            n_p = int(st.number_input("Número de parámetros", 0, 30, max(1, len(cur)) if cur else 1, step=1, key="num_params"))
+            n_p = int(st.number_input(
+                "Número de parámetros",
+                0,
+                30,
+                max(1, len(cur)) if cur else 1,
+                step=1,
+                key="num_params"
+            ))
             idx_opts = list(idx_specs.keys())
             new_params = {}
 
@@ -521,61 +787,113 @@ if section == "Ingreso de información":
                 st.markdown(f"#### Parámetro {p+1}")
                 old_names = list(cur.keys())
                 old_name = old_names[p] if p < len(old_names) else f"param_{p+1}"
-                col1, col2 = st.columns([2, 3])
-                pname = col1.text_input(f"Nombre {p+1}", value=old_name, key=f"pname_{p}").strip()
-                p_idxs = col2.multiselect(f"Índices de {pname}", idx_opts, default=cur.get(old_name, {}).get("indices", []), key=f"pidxs_{p}")
 
-                if not valid_sym(pname): st.error(f"`{pname}` no válido."); continue
-                if pname in new_params: st.error(f"`{pname}` repetido."); continue
+                col1, col2 = st.columns([2, 3])
+                pname = col1.text_input(
+                    f"Nombre {p+1}",
+                    value=old_name,
+                    key=f"pname_{p}"
+                ).strip()
+                p_idxs = col2.multiselect(
+                    f"Índices de {pname}",
+                    idx_opts,
+                    default=cur.get(old_name, {}).get("indices", []),
+                    key=f"pidxs_{p}"
+                )
+
+                if not valid_sym(pname):
+                    st.error(f"`{pname}` no válido.")
+                    continue
+                if pname in new_params:
+                    st.error(f"`{pname}` repetido.")
+                    continue
 
                 ne = total_elems(p_idxs, idx_specs)
                 st.write(f"**Firma:** `{sig(pname, p_idxs)}` — **Elementos:** `{ne}`")
-                modes = ["Manual", "Aleatorio"] if ne <= 12 else ["Aleatorio"]
-                old_mode = cur.get(old_name, {}).get("mode", modes[0])
-                mode = st.radio(f"Modo {pname}", modes, index=modes.index(old_mode if old_mode in modes else modes[0]), horizontal=True, key=f"pmode_{p}")
-                old_vals = cur.get(old_name, {}).get("values", {})
-                record = {"indices": p_idxs, "mode": mode, "values": {}}
 
-                if not p_idxs:
-                    if mode == "Manual":
-                        record["values"] = scalar_set(st.number_input(f"Valor {pname}", value=scalar_get(old_vals), key=f"pscalar_{p}"))
+                modes = ["Manual", "Excel/CSV", "Aleatorio"] if ne <= 12 else ["Excel/CSV", "Aleatorio"]
+                old_mode = cur.get(old_name, {}).get("mode", modes[0])
+                if old_mode == "Excel":
+                    old_mode = "Excel/CSV"
+                if old_mode not in modes:
+                    old_mode = modes[0]
+
+                mode = st.radio(
+                    f"Modo de carga para {pname}",
+                    modes,
+                    index=modes.index(old_mode),
+                    horizontal=True,
+                    key=f"pmode_{p}"
+                )
+
+                old_vals = cur.get(old_name, {}).get("values", {})
+                current_values = _initial_param_values(p, pname, p_idxs, idx_specs, old_vals)
+                record = {"indices": p_idxs, "mode": mode, "values": dict(current_values)}
+
+                if mode == "Manual":
+                    if not p_idxs:
+                        value = st.number_input(
+                            f"Valor {pname}",
+                            value=scalar_get(current_values),
+                            key=f"pscalar_{p}"
+                        )
+                        record["values"] = _set_param_values(p, scalar_set(value))
+
+                    elif len(p_idxs) == 1:
+                        labels = idx_specs[p_idxs[0]]["elements"]
+                        df0 = vals_to_df1d(labels, current_values)
+                        edited = st.data_editor(
+                            df0,
+                            use_container_width=True,
+                            num_rows="fixed",
+                            hide_index=True,
+                            disabled=["label"],
+                            key=f"pman1d_{p}_{_param_signature_key(pname, p_idxs)}"
+                        )
+                        values = {str((str(row["label"]),)): float(row["value"]) for _, row in edited.iterrows()}
+                        record["values"] = _set_param_values(p, values)
+
                     else:
+                        clist = combos(p_idxs, idx_specs)
+                        df0 = vals_to_df(p_idxs, clist, current_values)
+                        edited = st.data_editor(
+                            df0,
+                            use_container_width=True,
+                            num_rows="fixed",
+                            hide_index=True,
+                            disabled=list(p_idxs),
+                            key=f"pmannd_{p}_{_param_signature_key(pname, p_idxs)}"
+                        )
+                        record["values"] = _set_param_values(p, df_to_vals(edited, p_idxs))
+
+                elif mode == "Excel/CSV":
+                    record["values"] = parameter_template_controls(p, pname, p_idxs, idx_specs, current_values)
+
+                else:  # Aleatorio
+                    if not p_idxs:
                         lo, hi, intg, seed = _rand_controls(f"ps_{p}")
-                        if lo > hi: st.error("Mínimo > máximo."); continue
+                        if lo > hi:
+                            st.error("Mínimo > máximo.")
+                            continue
                         if st.button(f"Generar {pname}", key=f"pgen_{p}"):
-                            st.session_state[f"_pvals_{pname}"] = rand_scalar(lo, hi, intg, seed)
-                        gv = st.session_state.get(f"_pvals_{pname}", old_vals or rand_scalar(lo, hi, intg, seed))
-                        record["values"] = gv
-                        st.write(f"Valor: **{scalar_get(gv):.4f}**")
-                elif len(p_idxs) == 1:
-                    labels = idx_specs[p_idxs[0]]["elements"]
-                    clist = combos(p_idxs, idx_specs)
-                    if mode == "Manual":
-                        df0 = vals_to_df1d(labels, old_vals)
-                        edited = st.data_editor(df0, use_container_width=True, num_rows="fixed", hide_index=True, disabled=["label"], key=f"pman1d_{p}")
-                        record["values"] = df_to_vals(edited.rename(columns={"label": p_idxs[0]}), p_idxs) if "label" not in edited else {str((row["label"],)): float(row["value"]) for _, row in edited.iterrows()}
+                            current_values = _set_param_values(p, rand_scalar(lo, hi, intg, seed))
+                        st.write(f"Valor: **{scalar_get(current_values):.4f}**")
+                        record["values"] = dict(current_values)
+
                     else:
-                        lo, hi, intg, seed = _rand_controls(f"p1d_{p}")
-                        if lo > hi: st.error("Mínimo > máximo."); continue
-                        if st.button(f"Generar {pname}", key=f"pgen1d_{p}"):
-                            st.session_state[f"_pvals_{pname}"] = rand_vals(clist, lo, hi, intg, seed)
-                        gv = st.session_state.get(f"_pvals_{pname}", old_vals or rand_vals(clist, lo, hi, intg, seed))
-                        record["values"] = gv
-                        st.dataframe(vals_to_df1d(labels, gv), use_container_width=True, hide_index=True)
-                else:
-                    clist = combos(p_idxs, idx_specs)
-                    if mode == "Manual":
-                        df0 = vals_to_df(p_idxs, clist, old_vals)
-                        edited = st.data_editor(df0, use_container_width=True, num_rows="fixed", hide_index=True, disabled=list(p_idxs), key=f"pmannd_{p}")
-                        record["values"] = df_to_vals(edited, p_idxs)
-                    else:
-                        lo, hi, intg, seed = _rand_controls(f"pnd_{p}")
-                        if lo > hi: st.error("Mínimo > máximo."); continue
-                        if st.button(f"Generar {pname}", key=f"pgennd_{p}"):
-                            st.session_state[f"_pvals_{pname}"] = rand_vals(clist, lo, hi, intg, seed)
-                        gv = st.session_state.get(f"_pvals_{pname}", old_vals or rand_vals(clist, lo, hi, intg, seed))
-                        record["values"] = gv
-                        st.dataframe(vals_to_df(p_idxs, clist, gv), use_container_width=True, hide_index=True)
+                        lo, hi, intg, seed = _rand_controls(f"prand_{p}")
+                        if lo > hi:
+                            st.error("Mínimo > máximo.")
+                            continue
+                        clist = combos(p_idxs, idx_specs)
+                        if st.button(f"Generar valores de {pname}", key=f"pgen_{p}"):
+                            current_values = _set_param_values(p, rand_vals(clist, lo, hi, intg, seed))
+                        record["values"] = dict(current_values)
+                        st.dataframe(
+                            template_df_for_parameter(p_idxs, idx_specs, record["values"]),
+                            use_container_width=True,
+                            hide_index=True
+                        )
 
                 new_params[pname] = record
 
@@ -583,7 +901,11 @@ if section == "Ingreso de información":
             if new_params:
                 st.write("**Resumen:**")
                 st.dataframe(pd.DataFrame([
-                    {"Parámetro": sig(n, v["indices"]), "Modo": v["mode"], "Elementos": total_elems(v["indices"], idx_specs)}
+                    {
+                        "Parámetro": sig(n, v["indices"]),
+                        "Modo": v["mode"],
+                        "Elementos": total_elems(v["indices"], idx_specs)
+                    }
                     for n, v in new_params.items()
                 ]), use_container_width=True, hide_index=True)
 
@@ -764,16 +1086,29 @@ elif section == "Salidas del modelo":
 
     with tab_solve:
         st.subheader("Resolver modelo")
+        solver_label = st.selectbox(
+            "Solver",
+            list(SOLVER_OPTIONS.keys()),
+            index=0,
+            help="HiGHS es la opción recomendada para modelos lineales continuos, enteros y binarios."
+        )
+
         if st.button("Resolver modelo", type="primary"):
             try:
                 model = build_pyomo_model(spec)
-                solver = pyo.SolverFactory("appsi_highs")
+                solver_name, solver = solver_factory_from_label(solver_label)
                 result = solver.solve(model)
+
+                try:
+                    objective_value = pyo.value(model.OBJ)
+                except Exception:
+                    objective_value = None
+
                 spec["results"] = {
-                    "solver_name": "appsi_highs",
+                    "solver_name": solver_name,
                     "termination_condition": str(result.solver.termination_condition),
                     "status": str(result.solver.status),
-                    "objective_value": pyo.value(model.OBJ),
+                    "objective_value": objective_value,
                 }
                 st.session_state["solved_model_object"] = model
                 st.success("Modelo resuelto correctamente.")
@@ -786,10 +1121,12 @@ elif section == "Salidas del modelo":
         if not results or not model:
             st.info("Aún no has resuelto el modelo.")
         else:
-            c1, c2 = st.columns(2)
-            with c1: kpi_card("Status", results["status"])
-            with c2: kpi_card("Termination", results["termination_condition"])
-            kpi_card("Valor óptimo", f"{results['objective_value']:,.6f}")
+            c1, c2, c3 = st.columns(3)
+            with c1: kpi_card("Solver", results.get("solver_name", ""))
+            with c2: kpi_card("Status", results["status"])
+            with c3: kpi_card("Termination", results["termination_condition"])
+            obj_val = results.get("objective_value")
+            kpi_card("Valor óptimo", "No disponible" if obj_val is None else f"{obj_val:,.6f}")
 
     with tab_vars:
         results = spec.get("results")
