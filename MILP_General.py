@@ -1511,7 +1511,7 @@ elif section == "Model Definition":
             sense_opts = ["minimize", "maximize"]
             sense = st.radio("Objective sense:", sense_opts, index=sense_opts.index(cur_obj.get("sense", "minimize")), horizontal=True, key="obj_sense", help="Choose whether the objective function is minimized or maximized.")
             old_terms = cur_obj.get("terms", [])
-            n_terms = int(st.number_input("Objective terms", 1, 20, max(1, len(old_terms) or 1), step=1, key="n_obj_terms", help="Number of additive/subtractive terms in the objective function."))
+            n_terms = int(st.number_input("Objective terms", 1, 20, max(1, len(old_terms) or 1), step=1, key="n_obj_terms", help="Number of additive/subtractive terms in the objective function. Each term is shown in a collapsible panel."))
             st.info(
                 "**Expression structure**\n\n"
                 "- Create separate **Objective terms** for addition/subtraction.\n"
@@ -1523,12 +1523,15 @@ elif section == "Model Definition":
 
             obj_terms = []
             for t in range(n_terms):
-                with st.container(border=True):
-                    st.markdown(f"### Objective term {t+1}")
+                old_term = old_terms[t] if t < len(old_terms) else None
+                old_preview = term_latex(old_term) if old_term else "new term"
+                term_title = f"Objective term {t+1} — {old_preview}"
+
+                with st.expander(term_title, expanded=(t == 0)):
                     term = build_term_ui(
                         f"obj_t{t}",
                         t,
-                        old_terms[t] if t < len(old_terms) else None,
+                        old_term,
                         catalog,
                         label_map,
                         idx_names,
@@ -1589,7 +1592,7 @@ elif section == "Model Definition":
                             f"LHS terms for {fname}", 0, 10, len(old_lhs),
                             step=1, key=f"nlhs_{r}",
                             on_change=_open_family, args=(r,),
-                            help="Each LHS term is placed in its own box."
+                            help="Each LHS term is grouped in its own box. The complete constraint family can be collapsed from its header."
                         ))
                         lhs_terms = []
                         for t in range(n_lhs):
@@ -1609,7 +1612,7 @@ elif section == "Model Definition":
                             f"RHS terms for {fname}", 0, 10, len(old_rhs),
                             step=1, key=f"nrhs_{r}",
                             on_change=_open_family, args=(r,),
-                            help="Each RHS term is placed in its own box."
+                            help="Each RHS term is grouped in its own box. The complete constraint family can be collapsed from its header."
                         ))
                         rhs_terms = []
                         for t in range(n_rhs):
