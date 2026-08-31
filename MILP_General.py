@@ -6,7 +6,7 @@ import io
 import ast
 import re
 from typing import Any
-import pyomo.environ as pyo
+import pyomo.environ as pyo 
 
 # ============================================================
 # PAGE CONFIG
