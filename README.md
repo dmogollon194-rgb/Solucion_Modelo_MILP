@@ -1,37 +1,89 @@
-# Linear Model Solver
+# MILP General
 
-A Streamlit application for building, validating, solving, and inspecting single-objective linear optimization models through a graphical interface.
+**MILP General** is a Streamlit application for building, validating, solving, and inspecting single-objective Mixed-Integer Linear Programming (MILP) models through a graphical interface.
 
-The application uses **Pyomo** to construct the mathematical model and supports continuous, integer, and binary decision variables.
+The application dynamically constructs the optimization model with **Pyomo** and solves it using **HiGHS**.
 
 ---
 
-## Features
+## Project Structure
 
-### 1. Data Input
+```text
+MILP_General/
+├── MILP_General.py
+├── README.md
+└── requirements.txt
+```
 
-The **Data Input** section is organized into three tabs:
+### Files
+
+- `MILP_General.py` — main Streamlit application.
+- `README.md` — project documentation.
+- `requirements.txt` — Python dependencies required to run the application.
+
+---
+
+## Main Features
+
+The application is organized into three main sections:
+
+1. **Data Input**
+2. **Model Definition**
+3. **Model Outputs**
+
+---
+
+# 1. Data Input
+
+This section is used to define the basic components of the optimization model.
+
+It contains three tabs:
 
 - **Indices**
 - **Parameters**
 - **Variables**
 
-#### Indices
+## Indices
 
 Each index is defined by:
 
-- a symbolic name, such as `i`, `j`, or `k`;
+- a symbolic name;
 - a finite size.
 
-For example, an index `j` with size `21` is internally represented as:
+Example:
+
+```text
+Index name: j
+Size: 21
+```
+
+The application internally generates:
 
 ```text
 j1, j2, ..., j21
 ```
 
-Index positions are interpreted numerically from `1` to `N_j`.
+The corresponding positions are interpreted as:
 
-#### Parameters
+\[
+j=1,\ldots,21.
+\]
+
+The size of an index can be referenced in dynamic expressions using:
+
+```text
+N_j
+```
+
+For example, if `j` contains 21 elements:
+
+\[
+N_j=21.
+\]
+
+---
+
+## Parameters
 
 Parameters may be:
 
@@ -39,20 +91,32 @@ Parameters may be:
 - one-dimensional;
 - multidimensional.
 
-Three input modes are available:
+Available input modes are:
 
 - **Manual**
 - **Excel/CSV**
 - **Random**
 
-For parameter arrays with more than **12 elements**, manual input is disabled and the application automatically offers:
+When a parameter contains more than **12 elements**, manual entry is disabled and the application offers:
 
 - **Excel/CSV**
 - **Random**
 
-##### Excel/CSV format
+### Manual Input
 
-Uploaded parameter files must contain **numeric values only**.
+Manual input is intended for parameters with a relatively small number of elements.
+
+The application displays an editable table according to the indices associated with the parameter.
+
+### Excel/CSV Input
+
+Parameter values can be uploaded from:
+
+- `.csv`
+- `.xlsx`
+- `.xls`
+
+The uploaded file must contain **numeric values only**.
 
 Do not include:
 
@@ -68,15 +132,13 @@ CSV files may use:
 - semicolon `;`;
 - tab separators.
 
-Values may be entered in one row or one column. They are read from **left to right and then top to bottom**.
-
-Example:
+Values may be arranged horizontally:
 
 ```text
 3;2;1;3;3;1;4
 ```
 
-or:
+or vertically:
 
 ```text
 3
@@ -88,15 +150,31 @@ or:
 4
 ```
 
-The number of uploaded values must exactly match the number of elements required by the parameter.
+Values are read:
 
-The application can also generate downloadable CSV and Excel templates.
+1. from left to right;
+2. then from top to bottom.
 
-#### Variables
+The number of values in the file must exactly match the number of elements required by the parameter.
+
+The application also provides downloadable CSV and Excel templates.
+
+### Random Input
+
+Parameter values may also be randomly generated using:
+
+- minimum value;
+- maximum value;
+- integer/continuous option;
+- random seed.
+
+---
+
+## Variables
 
 Decision variables are defined by:
 
-- name;
+- variable name;
 - associated indices;
 - mathematical domain.
 
@@ -112,30 +190,44 @@ Example:
 x[i,j]
 ```
 
-with domain:
+with:
 
 ```text
-Binary
+Domain: Binary
 ```
+
+represents:
+
+\[
+x_{ij}\in\{0,1\}.
+\]
 
 ---
 
-## 2. Model Definition
+# 2. Model Definition
 
-The **Model Definition** section contains:
+This section is used to construct the optimization model.
+
+It contains three tabs:
 
 - **Objective Function**
 - **Constraints**
 - **Mathematical Model**
 
-### Objective Function
+---
 
-The application supports one objective function with either:
+## Objective Function
+
+The application supports one objective function.
+
+Available objective senses:
 
 - **minimize**
 - **maximize**
 
-The objective is constructed from multiple terms.
+The objective function is constructed from multiple terms.
+
+### Operators Between Terms
 
 Complete terms may be connected using:
 
@@ -144,25 +236,39 @@ Complete terms may be connected using:
 - `×` Multiply
 - `÷` Divide
 
-Factors inside each term may also be connected using multiplication or division.
-
-Example:
-
-```text
-WH × TN - 8 × sum(i) sum(j) x[i,j]
-```
-
-which represents:
+For example:
 
 \[
-\min Z =
-WH \cdot TN -
-8\sum_i\sum_j x_{ij}.
+WH\cdot TN
+-
+8\sum_i\sum_jx_{ij}.
 \]
 
-Objective terms are displayed in **collapsible panels**. The application preserves the active panel when a control inside the term is modified.
+### Operators Inside Terms
 
-### Summations
+Factors inside a term may also be connected using:
+
+- `×` Multiply
+- `÷` Divide
+
+This allows expressions involving:
+
+- parameters;
+- decision variables;
+- constants;
+- summations.
+
+The application checks whether the resulting expression remains linear.
+
+### Collapsible Terms
+
+Each objective-function term is displayed inside a collapsible panel.
+
+The active term remains open when its configuration is modified, avoiding unnecessary reopening after each Streamlit rerun.
+
+---
+
+## Summations
 
 Each summation is defined by:
 
@@ -170,7 +276,15 @@ Each summation is defined by:
 - **Lower bound**
 - **Upper bound**
 
-For a complete index:
+### Complete Index
+
+For:
+
+\[
+\sum_{i=1}^{N_i},
+\]
+
+enter:
 
 ```text
 Sum index: i
@@ -178,27 +292,21 @@ Lower bound: 1
 Upper bound: N_i
 ```
 
-represents:
+`N_i` represents the total size of index `i`.
 
-\[
-\sum_{i=1}^{N_i}.
-\]
+### Dynamic Bounds
 
-`N_i` means the total size of index `i`.
-
-Dynamic bounds are supported.
-
-Examples:
+Summation bounds may contain expressions such as:
 
 ```text
-j + 2
-2*j + 1
-N_i - 1
+j+2
+k+2
+2*j+1
+N_i-1
 k
-k + 2
 ```
 
-For example:
+Example:
 
 ```text
 Sum index: j
@@ -212,23 +320,31 @@ represents:
 \sum_{j=k}^{k+2}.
 \]
 
-A summation bound may depend on a free or outer index, but it cannot depend on its own summation index.
+A bound may depend on another free or outer index.
 
-For nested summations, **Summation 1 is the outermost summation**.
+A bound cannot depend on its own summation index.
 
-### Constraints
+For nested summations:
 
-Constraints are organized into collapsible **constraint families**.
+- **Summation 1** is the outermost;
+- **Summation 2** is inside Summation 1;
+- subsequent summations continue inward.
+
+---
+
+## Constraints
+
+Constraints are organized into **constraint families**.
 
 Each family contains:
 
 - family name;
 - `For all` indices;
 - relational operator;
-- left-hand side terms;
-- right-hand side terms.
+- left-hand side;
+- right-hand side.
 
-Supported relational operators:
+Available relational operators:
 
 - `<=`
 - `>=`
@@ -237,212 +353,11 @@ Supported relational operators:
 Example:
 
 \[
-\sum_{j=k}^{k+2}x_{ij}\leq 1
+\sum_{j=k}^{k+2}x_{ij}\leq1
 \qquad \forall i,k.
 \]
 
-The application validates:
-
-- undefined indices;
-- duplicated summation indices;
-- invalid summation bounds;
-- free indices;
-- `For all` consistency;
-- structural compatibility between both sides of a constraint.
-
-### Mathematical Model
-
-The **Mathematical Model** tab displays the complete model in mathematical notation before it is sent to the solver.
-
-This allows the user to review:
-
-- objective function;
-- constraint families;
-- summation bounds;
-- quantifiers;
-- relational operators.
-
----
-
-## 3. Model Outputs
-
-Before solving, the application validates the model specification.
-
-The current implementation is designed for **linear models**.
-
-It rejects structures such as:
-
-\[
-x_i x_j
-\]
-
-or:
-
-\[
-\frac{x_i}{x_j},
-\]
-
-because these expressions are nonlinear.
-
-Multiplication or division by constants and parameters may be used when the resulting expression remains linear.
-
-### Supported Solvers
-
-The interface currently supports:
-
-- **HiGHS**
-- **GLPK**
-- **CBC**
-
-HiGHS is the recommended default solver.
-
-After solving, the application displays:
-
-- solver;
-- solver status;
-- termination condition;
-- optimal objective value.
-
-### Solution Variables
-
-The solution can be inspected in two ways:
-
-#### Select Variable
-
-Displays the complete solution table for a selected decision variable.
-
-#### Nonzero Variables
-
-Displays only decision-variable components whose absolute value is greater than:
-
-```text
-1e-9
-```
-
-Solution tables can be exported as CSV files.
-
----
-
-## Requirements
-
-Python 3.10 or later is recommended.
-
-Core Python packages:
-
-```text
-streamlit
-pandas
-numpy
-pyomo
-```
-
-For Excel support:
-
-```text
-openpyxl
-xlsxwriter
-```
-
-For HiGHS:
-
-```text
-highspy
-```
-
-Install the Python dependencies with:
-
-```bash
-pip install streamlit pandas numpy pyomo openpyxl xlsxwriter highspy
-```
-
-GLPK and CBC are external solvers and must be installed separately if they are going to be used.
-
-### Ubuntu / Debian
-
-GLPK:
-
-```bash
-sudo apt update
-sudo apt install glpk-utils
-```
-
-CBC:
-
-```bash
-sudo apt install coinor-cbc
-```
-
----
-
-## Running the Application
-
-Place the application file in the project directory.
-
-Example structure:
-
-```text
-linear-model-solver/
-├── linear_model_builder_english.py
-└── README.md
-```
-
-Run:
-
-```bash
-streamlit run linear_model_builder_english.py
-```
-
-Streamlit will display the local address in the terminal, usually:
-
-```text
-http://localhost:8501
-```
-
----
-
-## Recommended Workflow
-
-1. Open **Data Input**.
-2. Define all indices.
-3. Define and load the parameters.
-4. Define the decision variables and their domains.
-5. Open **Model Definition**.
-6. Construct the objective function.
-7. Define each constraint family.
-8. Review the complete formulation in **Mathematical Model**.
-9. Open **Model Outputs**.
-10. Select a solver.
-11. Solve the model.
-12. Inspect or export the decision-variable values.
-
----
-
-## Dynamic Index Example
-
-Suppose:
-
-```text
-i = 1,...,10
-j = 1,...,21
-k = 1,...,19
-```
-
-and:
-
-```text
-x[i,j]
-```
-
-is binary.
-
-The constraint:
-
-\[
-\sum_{j=k}^{k+2}x_{ij}\leq1
-\qquad \forall i,k
-\]
-
-can be entered as:
+The corresponding configuration is:
 
 ```text
 For all:
@@ -464,37 +379,272 @@ Right-hand side:
 1
 ```
 
-For `k = 1`, this generates:
+The application validates:
+
+- undefined indices;
+- duplicated summation indices;
+- invalid dynamic bounds;
+- free indices;
+- `For all` consistency;
+- structural compatibility of both sides;
+- linearity.
+
+---
+
+## Dynamic Index Example
+
+Suppose:
+
+\[
+i=1,\ldots,10,
+\]
+
+\[
+j=1,\ldots,21,
+\]
+
+and:
+
+\[
+k=1,\ldots,19.
+\]
+
+Let:
+
+\[
+x_{ij}\in\{0,1\}.
+\]
+
+The family:
+
+\[
+\sum_{j=k}^{k+2}x_{ij}\leq1
+\qquad\forall i,k
+\]
+
+generates moving windows of three consecutive positions.
+
+For \(k=1\):
 
 \[
 x_{i1}+x_{i2}+x_{i3}\leq1.
 \]
 
-For `k = 2`:
+For \(k=2\):
 
 \[
 x_{i2}+x_{i3}+x_{i4}\leq1.
 \]
 
-The final window for `k = 19` is:
+For \(k=19\):
 
 \[
 x_{i19}+x_{i20}+x_{i21}\leq1.
 \]
 
+Because:
+
+\[
+19+2=21=N_j,
+\]
+
+the final window remains inside the valid range of index `j`.
+
 ---
 
-## Parameter Upload Example
+## Mathematical Model
 
-If parameter `MIN[j]` has 21 elements, the uploaded CSV must contain exactly 21 numeric values.
+The **Mathematical Model** tab displays the complete structured formulation before solving.
 
-Valid:
+It includes:
+
+- objective function;
+- constraint families;
+- summation limits;
+- relational operators;
+- `For all` indices.
+
+This tab should be reviewed before solving the model.
+
+---
+
+# 3. Model Outputs
+
+Before solving, the application validates the complete model specification.
+
+The application is designed for **linear and mixed-integer linear models**.
+
+Expressions that introduce nonlinearity are rejected.
+
+Examples of nonlinear expressions:
+
+\[
+x_i x_j
+\]
+
+and:
+
+\[
+\frac{x_i}{x_j}.
+\]
+
+Multiplication and division by constants or parameters are permitted when the resulting mathematical expression remains linear.
+
+---
+
+## Solver
+
+The application uses:
+
+### HiGHS
+
+HiGHS is the only solver configured in the application.
+
+It is accessed through Pyomo using:
+
+```text
+appsi_highs
+```
+
+HiGHS supports the continuous and mixed-integer linear models handled by the application.
+
+---
+
+## Solution Information
+
+After solving, the application displays:
+
+- solver status;
+- termination condition;
+- optimal objective value.
+
+---
+
+## Solution Variables
+
+The **Solution Variables** tab contains two views.
+
+### Select Variable
+
+Displays all components of a selected decision variable.
+
+### Nonzero Variables
+
+Displays only components satisfying:
+
+```text
+abs(value) > 1e-9
+```
+
+This view is useful for binary and sparse optimization models.
+
+Results can be exported as CSV files.
+
+---
+
+# Installation
+
+## Python
+
+Python 3.10 or later is recommended.
+
+## Install Dependencies
+
+From the project directory, run:
+
+```bash
+pip install -r requirements.txt
+```
+
+The project dependencies are:
+
+```text
+streamlit
+pandas
+numpy
+pyomo
+highspy
+openpyxl
+xlsxwriter
+```
+
+No separate GLPK or CBC installation is required.
+
+---
+
+# Running the Application
+
+From the project directory:
+
+```bash
+streamlit run MILP_General.py
+```
+
+Streamlit will start the application and normally provide a local URL similar to:
+
+```text
+http://localhost:8501
+```
+
+---
+
+# Recommended Workflow
+
+1. Open **Data Input**.
+2. Define the model indices.
+3. Define the parameters.
+4. Enter, upload, or randomly generate parameter values.
+5. Define the decision variables.
+6. Open **Model Definition**.
+7. Construct the objective function.
+8. Define the constraint families.
+9. Review the formulation in **Mathematical Model**.
+10. Open **Model Outputs**.
+11. Solve the model with **HiGHS**.
+12. Inspect the optimal objective value.
+13. Review or export the solution variables.
+
+---
+
+# Model Validation
+
+Before solving, the application checks for:
+
+- missing objective function;
+- missing indices;
+- missing variables;
+- invalid symbolic names;
+- duplicated names;
+- undefined indices;
+- duplicated summation indices;
+- invalid dynamic summation expressions;
+- inconsistent free indices;
+- inconsistent `For all` definitions;
+- division by zero where detectable;
+- nonlinear products involving decision variables;
+- division by expressions containing decision variables.
+
+The model must pass validation before it is sent to Pyomo and HiGHS.
+
+---
+
+# Parameter Upload Example
+
+Suppose:
+
+```text
+MIN[j]
+```
+
+contains 21 elements.
+
+A valid CSV may contain:
 
 ```text
 3;2;1;3;3;1;4;2;1;4;2;1;3;2;1;1;1;1;1;1;1
 ```
 
-Invalid:
+The following format is invalid:
 
 ```text
 MIN
@@ -504,7 +654,7 @@ MIN
 ...
 ```
 
-Invalid:
+The following format is also invalid:
 
 ```text
 j,value
@@ -513,41 +663,44 @@ j2,2
 ...
 ```
 
-The application assigns uploaded values according to the internal order of the parameter indices.
+Only numeric values should be uploaded.
 
 ---
 
-## Model Validation
+# Technical Stack
 
-The application performs validation before solving, including:
+- **Python**
+- **Streamlit**
+- **Pyomo**
+- **HiGHS**
+- **Pandas**
+- **NumPy**
 
-- missing objective function;
-- missing indices;
-- missing variables;
-- invalid symbol names;
-- duplicated names;
-- inconsistent free indices;
-- invalid `For all` indices;
-- invalid dynamic summation expressions;
-- division by zero where detectable;
-- multiplication of decision-variable expressions that produces nonlinearity;
-- division by a decision-variable expression.
+Optional Excel support uses:
 
-A model must pass validation before it is sent to Pyomo.
+- **openpyxl**
+- **xlsxwriter**
 
 ---
 
-## Notes
+# Current Scope
 
-- The application currently supports a **single objective function**.
-- The optimization model is built dynamically with **Pyomo**.
-- Index sets are finite and ordered.
-- Parameter values are stored according to the Cartesian product of their associated indices.
-- Dynamic summation limits are interpreted using index positions.
-- Solver availability depends on the packages and executables installed in the local environment.
+The current version supports:
+
+- one objective function;
+- finite ordered index sets;
+- scalar and multidimensional parameters;
+- manual, file-based, and random parameter input;
+- continuous, integer, and binary variables;
+- dynamic summation bounds;
+- constraint families;
+- linearity validation;
+- mathematical preview;
+- MILP solution using HiGHS;
+- CSV export of solution variables.
 
 ---
 
-## Author
+# Author
 
 **M.Sc. Dilan Mogollón**
