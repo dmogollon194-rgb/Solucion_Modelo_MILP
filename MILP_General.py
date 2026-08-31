@@ -1928,7 +1928,7 @@ elif section == "Model Outputs":
             with c3: kpi_card("Termination", results["termination_condition"])
             obj_val = results.get("objective_value")
             kpi_card("Optimal value", "Not available" if obj_val is None else f"{obj_val:,.6f}")
- 
+
     with tab_vars:
         section_box(
             "Solution Variables",
