@@ -3,15 +3,13 @@ import pandas as pd
 import numpy as np
 import itertools
 import io
-import ast
-import re
 from typing import Any
-import pyomo.environ as pyo 
+import pyomo.environ as pyo
 
 # ============================================================
 # PAGE CONFIG
 # ============================================================
-st.set_page_config(page_title="Algebraic Model Builder", layout="wide")
+st.set_page_config(page_title="Constructor de Modelos Algebraicos", layout="wide")
 
 # ============================================================
 # STYLES + WATERMARK
@@ -36,9 +34,6 @@ h1,h2,h3,h4,h5,h6,p,label,div,span{color:#f3f7ff}
 .kpi-value{font-size:2.25rem;font-weight:800;color:#fff;line-height:1.05;word-break:break-word}
 .section-box{background:rgba(5,12,28,.78);border:1px solid rgba(61,132,255,.16);
     border-radius:18px;padding:18px 18px 14px}
-.help-tip{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;
-    margin-left:8px;border-radius:50%;border:1px solid rgba(150,190,255,.55);color:#cfe0ff;
-    font-size:.78rem;font-weight:800;cursor:help;vertical-align:middle}
 div[data-testid="stSidebar"]{background:linear-gradient(180deg,#08101f 0%,#050b16 100%);
     border-right:1px solid rgba(61,132,255,.18)}
 .stButton>button,.stDownloadButton>button{background:linear-gradient(135deg,#0c2b69,#0a1f49);
@@ -168,20 +163,20 @@ def _values_match_structure(values: dict, idx_names: list[str], idx_specs: dict)
 
 
 def _initial_param_values(row_pos: int, pname: str, idx_names: list[str], idx_specs: dict, old_vals: dict) -> dict:
-    """Return persistent values compatible with the current parameter structure."""
+    """Devuelve valores persistentes compatibles con la estructura actual del parámetro."""
     store_key = _param_store_key(row_pos)
 
-    # 1) Priority: live values from the editor in session_state.
+    # 1) Prioridad: valores vivos del editor en session_state.
     stored = st.session_state.get(store_key)
     if _values_match_structure(stored, idx_names, idx_specs):
         return dict(stored)
 
-    # 2) Then: values saved in the previous spec.
+    # 2) Luego: valores guardados en el spec anterior.
     if _values_match_structure(old_vals, idx_names, idx_specs):
         st.session_state[store_key] = dict(old_vals)
         return dict(old_vals)
 
-    # 3) If dimensionality changed, initialize zeros with the new structure.
+    # 3) Si cambió la dimensionalidad, inicializa en cero con la nueva estructura.
     fresh = _empty_values_for_parameter(idx_names, idx_specs)
     st.session_state[store_key] = dict(fresh)
     return fresh
@@ -205,11 +200,11 @@ def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
 
 
 def dataframe_to_xlsx_bytes(df: pd.DataFrame) -> bytes | None:
-    """Create XLSX only when xlsxwriter is installed; otherwise return None without breaking the app."""
+    """Crea XLSX solo si xlsxwriter está instalado; si no, retorna None sin romper la app."""
     buffer = io.BytesIO()
     try:
         with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False, sheet_name="parameter")
+            df.to_excel(writer, index=False, sheet_name="parametro")
         return buffer.getvalue()
     except Exception:
         return None
@@ -224,35 +219,35 @@ def read_parameter_upload(uploaded_file) -> tuple[pd.DataFrame | None, str | Non
             try:
                 return pd.read_excel(uploaded_file), None
             except ImportError:
-                return None, "To load .xlsx files, install `openpyxl` or use the .csv template."
+                return None, "Para cargar archivos .xlsx instala `openpyxl` o carga la plantilla en formato .csv."
             except ModuleNotFoundError:
-                return None, "To load .xlsx files, install `openpyxl` or use the .csv template."
-        return None, "Unsupported format. Use .csv or .xlsx."
+                return None, "Para cargar archivos .xlsx instala `openpyxl` o carga la plantilla en formato .csv."
+        return None, "Formato no soportado. Usa .csv o .xlsx."
     except Exception as exc:
-        return None, f"The file could not be read: {exc}"
+        return None, f"No se pudo leer el archivo: {exc}"
 
 
 def validate_and_convert_parameter_df(df: pd.DataFrame, idx_names: list[str], idx_specs: dict) -> tuple[dict | None, list[str]]:
     errors: list[str] = []
     if df is None or df.empty:
-        return None, ["The file is empty."]
+        return None, ["El archivo está vacío."]
 
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
     if "value" not in df.columns:
-        errors.append("A column named exactly `value` is required.")
+        errors.append("Debe existir una columna llamada exactamente `value`.")
         return None, errors
 
     try:
         df["value"] = pd.to_numeric(df["value"], errors="raise")
     except Exception:
-        errors.append("The `value` column must contain numeric values only.")
+        errors.append("La columna `value` solo debe contener valores numéricos.")
         return None, errors
 
     if not idx_names:
         if len(df) < 1:
-            errors.append("A scalar parameter requires at least one row containing the `value` column.")
+            errors.append("El parámetro escalar necesita al menos una fila con la columna `value`.")
             return None, errors
         return {"__scalar__": float(df.iloc[0]["value"])}, []
 
@@ -260,7 +255,7 @@ def validate_and_convert_parameter_df(df: pd.DataFrame, idx_names: list[str], id
         idx = idx_names[0]
         index_col = "label" if "label" in df.columns else idx if idx in df.columns else None
         if index_col is None:
-            errors.append(f"A `label` column or an index column is required: `{idx}`.")
+            errors.append(f"Debe existir una columna `label` o una columna `{idx}`.")
             return None, errors
 
         work = df[[index_col, "value"]].copy()
@@ -268,16 +263,16 @@ def validate_and_convert_parameter_df(df: pd.DataFrame, idx_names: list[str], id
 
         if work[index_col].duplicated().any():
             repeated = work.loc[work[index_col].duplicated(), index_col].unique().tolist()
-            errors.append(f"Duplicated labels: {repeated}.")
+            errors.append(f"Hay etiquetas repetidas: {repeated}.")
 
         expected = set(idx_specs[idx]["elements"])
         observed = set(work[index_col].tolist())
         missing = sorted(expected - observed)
         observed_extra = sorted(observed - expected)
         if missing:
-            errors.append(f"Missing labels for index `{idx}`: {missing}.")
+            errors.append(f"Faltan etiquetas del índice `{idx}`: {missing}.")
         if observed_extra:
-            errors.append(f"Labels not belonging to index `{idx}`: {observed_extra}.")
+            errors.append(f"Hay etiquetas que no pertenecen al índice `{idx}`: {observed_extra}.")
         if errors:
             return None, errors
 
@@ -289,7 +284,7 @@ def validate_and_convert_parameter_df(df: pd.DataFrame, idx_names: list[str], id
     required_cols = idx_names + ["value"]
     missing_cols = [c for c in required_cols if c not in df.columns]
     if missing_cols:
-        errors.append(f"Missing required columns: {missing_cols}.")
+        errors.append(f"Faltan columnas requeridas: {missing_cols}.")
         return None, errors
 
     work = df[required_cols].copy()
@@ -298,16 +293,16 @@ def validate_and_convert_parameter_df(df: pd.DataFrame, idx_names: list[str], id
 
     if work.duplicated(subset=idx_names).any():
         repeated_rows = work.loc[work.duplicated(subset=idx_names), idx_names].drop_duplicates().to_dict("records")
-        errors.append(f"Duplicated index combinations: {repeated_rows}.")
+        errors.append(f"Hay combinaciones repetidas: {repeated_rows}.")
 
     expected = set(combos(idx_names, idx_specs))
     observed = set(tuple(row[idx] for idx in idx_names) for _, row in work.iterrows())
     missing = sorted(expected - observed)
     extra = sorted(observed - expected)
     if missing:
-        errors.append(f"Missing index combinations: {missing}.")
+        errors.append(f"Faltan combinaciones de índices: {missing}.")
     if extra:
-        errors.append(f"Combinations not belonging to the defined indices: {extra}.")
+        errors.append(f"Hay combinaciones que no pertenecen a los índices definidos: {extra}.")
     if errors:
         return None, errors
 
@@ -320,14 +315,14 @@ def validate_and_convert_parameter_df(df: pd.DataFrame, idx_names: list[str], id
 
 def parameter_template_controls(row_pos: int, pname: str, idx_names: list[str], idx_specs: dict, current_values: dict):
     df_template = template_df_for_parameter(idx_names, idx_specs, current_values)
-    file_base = f"template_{pname}"
+    file_base = f"plantilla_{pname}"
     widget_suffix = _param_signature_key(pname, idx_names)
 
-    st.caption("Download the template, fill in only the `value` column, and upload it again. Do not rename the index columns.")
+    st.caption("Descarga la plantilla, llena únicamente la columna `value` y vuelve a cargar el archivo. No cambies los nombres de las columnas de índices.")
     dl1, dl2 = st.columns(2)
     with dl1:
         st.download_button(
-            "Download CSV template",
+            "Descargar plantilla CSV",
             data=dataframe_to_csv_bytes(df_template),
             file_name=f"{file_base}.csv",
             mime="text/csv",
@@ -337,17 +332,17 @@ def parameter_template_controls(row_pos: int, pname: str, idx_names: list[str], 
         xlsx_bytes = dataframe_to_xlsx_bytes(df_template)
         if xlsx_bytes is not None:
             st.download_button(
-                "Download Excel template",
+                "Descargar plantilla Excel",
                 data=xlsx_bytes,
                 file_name=f"{file_base}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key=f"tmpl_xlsx_{row_pos}_{widget_suffix}",
             )
         else:
-            st.info("Install `xlsxwriter` to download .xlsx files. The CSV template can still be opened in Excel.")
+            st.info("Para descargar .xlsx instala `xlsxwriter`. La plantilla CSV funciona en Excel.")
 
     uploaded = st.file_uploader(
-        f"Upload values for {pname}",
+        f"Cargar valores para {pname}",
         type=["csv", "xlsx", "xls"],
         key=f"upload_param_{row_pos}_{widget_suffix}",
     )
@@ -366,115 +361,19 @@ def parameter_template_controls(row_pos: int, pname: str, idx_names: list[str], 
     if errors:
         for err in errors:
             st.error(err)
-        st.write("Uploaded file preview:")
+        st.write("Vista del archivo cargado:")
         st.dataframe(df_uploaded, use_container_width=True, hide_index=True)
         return current_values
 
-    st.success("Values loaded successfully.")
+    st.success("Valores cargados correctamente.")
     _set_param_values(row_pos, values)
     st.dataframe(template_df_for_parameter(idx_names, idx_specs, values), use_container_width=True, hide_index=True)
     return values
 
 # ============================================================
-# UTILITIES — EXPRESSIONS + DYNAMIC SUMMATION BOUNDS
+# UTILITIES — EXPRESSIONS
 # ============================================================
-DOMAIN_LABELS = {"Binary": "Binary", "NonNegativeReals": "Nonnegative reals", "NonNegativeIntegers": "Nonnegative integers"}
-
-def _term_sums(t: dict) -> list[dict]:
-    """Return the new summation structure while remaining compatible with old models."""
-    if "sums" in t:
-        return t.get("sums", [])
-    return [{"index": idx, "lower": "1", "upper": f"N_{idx}"} for idx in t.get("sum_over", [])]
-
-def _expr_names(expr: str) -> set[str]:
-    try:
-        tree = ast.parse((expr or "").strip(), mode="eval")
-    except Exception:
-        return set()
-    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
-
-def _safe_bound_eval(expr: str, numeric_env: dict[str, int], idx_specs: dict) -> int:
-    """Safely evaluate integer bound expressions such as j+2, 2*j+1, or N_i-1."""
-    expr = (expr or "").strip()
-    if not expr:
-        raise ValueError("A summation bound cannot be empty.")
-
-    names = dict(numeric_env)
-    names.update({f"N_{idx}": int(data["size"]) for idx, data in idx_specs.items()})
-    tree = ast.parse(expr, mode="eval")
-
-    def ev(node):
-        if isinstance(node, ast.Expression):
-            return ev(node.body)
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-            return node.value
-        if isinstance(node, ast.Name):
-            if node.id not in names:
-                raise ValueError(f"Unknown symbol `{node.id}` in bound `{expr}`.")
-            return names[node.id]
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-            val = ev(node.operand)
-            return val if isinstance(node.op, ast.UAdd) else -val
-        if isinstance(node, ast.BinOp):
-            a, b = ev(node.left), ev(node.right)
-            if isinstance(node.op, ast.Add): return a + b
-            if isinstance(node.op, ast.Sub): return a - b
-            if isinstance(node.op, ast.Mult): return a * b
-            if isinstance(node.op, ast.Div): return a / b
-            if isinstance(node.op, ast.FloorDiv): return a // b
-            if isinstance(node.op, ast.Mod): return a % b
-            if isinstance(node.op, ast.Pow): return a ** b
-        raise ValueError(f"Unsupported expression in bound `{expr}`.")
-
-    value = ev(tree)
-    rounded = round(float(value))
-    if abs(float(value) - rounded) > 1e-9:
-        raise ValueError(f"Bound `{expr}` evaluates to {value}, but index positions must be integers.")
-    return int(rounded)
-
-def _validate_bound_expression(expr: str, idx_names: list[str], current_sum_idx: str | None = None) -> list[str]:
-    errors = []
-    try:
-        tree = ast.parse((expr or "").strip(), mode="eval")
-    except Exception:
-        return [f"Invalid bound expression `{expr}`."]
-
-    allowed_names = set(idx_names) | {f"N_{idx}" for idx in idx_names}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            errors.append(f"Functions are not allowed in bound `{expr}`.")
-        elif isinstance(node, ast.Name) and node.id not in allowed_names:
-            errors.append(f"Unknown symbol `{node.id}` in bound `{expr}`.")
-        elif isinstance(node, (ast.Attribute, ast.Subscript, ast.List, ast.Dict, ast.Set, ast.Tuple)):
-            errors.append(f"Unsupported syntax in bound `{expr}`.")
-    if current_sum_idx and current_sum_idx in _expr_names(expr):
-        errors.append(f"Bound `{expr}` cannot depend on its own summation index `{current_sum_idx}`.")
-    return list(dict.fromkeys(errors))
-
-def _index_position(idx: str, value: str, idx_specs: dict) -> int:
-    elements = idx_specs[idx]["elements"]
-    try:
-        return elements.index(value) + 1
-    except ValueError as exc:
-        raise ValueError(f"Value `{value}` does not belong to index `{idx}`.") from exc
-
-def _bound_env(env: dict, idx_specs: dict) -> dict[str, int]:
-    return {idx: _index_position(idx, value, idx_specs) for idx, value in env.items() if idx in idx_specs}
-
-def _sum_values(sum_spec: dict, env: dict, idx_specs: dict) -> list[str]:
-    idx = sum_spec["index"]
-    numeric_env = _bound_env(env, idx_specs)
-    lower = _safe_bound_eval(sum_spec.get("lower", "1"), numeric_env, idx_specs)
-    upper = _safe_bound_eval(sum_spec.get("upper", f"N_{idx}"), numeric_env, idx_specs)
-    elements = idx_specs[idx]["elements"]
-    if lower > upper:
-        return []
-    # Intersect the requested range with the valid positions of the index set.
-    start = max(1, lower)
-    end = min(len(elements), upper)
-    if start > end:
-        return []
-    return elements[start - 1:end]
+DOMAIN_LABELS = {"Binary": "Binarias", "NonNegativeReals": "Reales ≥ 0", "NonNegativeIntegers": "Enteras ≥ 0"}
 
 def _fac_latex(f: dict) -> str:
     if f["type"] == "constant":
@@ -486,11 +385,8 @@ def _fac_latex(f: dict) -> str:
 def term_latex(t: dict) -> str:
     factors = t.get("factors", [])
     body = r" \cdot ".join(_fac_latex(f) for f in factors) if factors else "0"
-    for s in reversed(_term_sums(t)):
-        idx = s["index"]
-        lower = s.get("lower", "1")
-        upper = s.get("upper", f"N_{idx}")
-        body = rf"\sum_{{{idx}={lower}}}^{{{upper}}}\left({body}\right)"
+    for idx in t.get("sum_over", []):
+        body = rf"\sum_{{{idx}}}\left({body}\right)"
     return f"- {body}" if t.get("sign") == "-" else f"+ {body}"
 
 def expr_latex(terms: list[dict]) -> str:
@@ -514,79 +410,42 @@ def term_free_idxs(t: dict) -> list[str]:
     for f in t.get("factors", []):
         if f["type"] == "object":
             used.extend(f["indices"])
-
-    sums = _term_sums(t)
-    sum_indices = [s["index"] for s in sums]
-    for s in sums:
-        for expr in (s.get("lower", "1"), s.get("upper", f"N_{s['index']}")):
-            used.extend(name for name in _expr_names(expr) if not name.startswith("N_"))
-
     seen, out = set(), []
     for x in used:
         if x not in seen:
             seen.add(x); out.append(x)
-    return [x for x in out if x not in sum_indices]
+    return [x for x in out if x not in t.get("sum_over", [])]
 
 # ============================================================
 # UTILITIES — VALIDATION
 # ============================================================
-def validate_term_sums(t: dict, idx_names: list[str], context: str) -> list[str]:
+def validate_obj(terms: list[dict]) -> list[str]:
     errs = []
-    sums = _term_sums(t)
-    seen = set()
-    for pos, s in enumerate(sums, 1):
-        idx = s.get("index")
-        if idx not in idx_names:
-            errs.append(f"{context}: summation {pos} uses an undefined index `{idx}`.")
-            continue
-        if idx in seen:
-            errs.append(f"{context}: index `{idx}` is used in more than one summation in the same term.")
-        seen.add(idx)
-        errs.extend(f"{context}: {e}" for e in _validate_bound_expression(s.get("lower", "1"), idx_names, idx))
-        errs.extend(f"{context}: {e}" for e in _validate_bound_expression(s.get("upper", f"N_{idx}"), idx_names, idx))
-
-        later_indices = {z.get("index") for z in sums[pos:] if z.get("index")}
-        dependencies = (_expr_names(s.get("lower", "1")) | _expr_names(s.get("upper", f"N_{idx}"))) & set(idx_names)
-        invalid_later = sorted(dependencies & later_indices)
-        if invalid_later:
-            errs.append(f"{context}: bounds for `{idx}` cannot depend on inner/later summation indices {invalid_later}.")
-    return errs
-
-def validate_obj(terms: list[dict], idx_names: list[str] | None = None) -> list[str]:
-    errs = []
-    idx_names = idx_names or list(spec.get("indices", {}).keys())
     for i, t in enumerate(terms, 1):
-        errs.extend(validate_term_sums(t, idx_names, f"Objective term {i}"))
         free = term_free_idxs(t)
         if free:
-            errs.append(f"Objective term {i}: free indices without a matching summation → {', '.join(free)}")
+            errs.append(f"Término FO {i}: índices libres sin sumatoria → {', '.join(free)}")
     return errs
 
-def validate_family(fam: dict, idx_names: list[str] | None = None) -> list[str]:
+def validate_family(fam: dict) -> list[str]:
     errs = []
-    idx_names = idx_names or list(spec.get("indices", {}).keys())
-    for i, t in enumerate(fam.get("lhs_terms", []), 1):
-        errs.extend(validate_term_sums(t, idx_names, f"Constraint {fam.get('name', '')} LHS term {i}"))
-    for i, t in enumerate(fam.get("rhs_terms", []), 1):
-        errs.extend(validate_term_sums(t, idx_names, f"Constraint {fam.get('name', '')} RHS term {i}"))
-
     lhs_free = list({x for t in fam.get("lhs_terms", []) for x in term_free_idxs(t)})
     rhs_free = list({x for t in fam.get("rhs_terms", []) for x in term_free_idxs(t)})
     forall = fam.get("forall", [])
     lc, rc = not lhs_free, not rhs_free
     if not lc and not rc:
         if sorted(lhs_free) != sorted(rhs_free):
-            errs.append(f"Free indices on LHS {lhs_free} ≠ free indices on RHS {rhs_free}")
+            errs.append(f"Índices libres LHS {lhs_free} ≠ RHS {rhs_free}")
         if sorted(lhs_free) != sorted(forall):
-            errs.append(f"Free indices {lhs_free} ≠ forall indices {forall}")
+            errs.append(f"Índices libres {lhs_free} ≠ forall {forall}")
     elif lc and not rc:
         if sorted(rhs_free) != sorted(forall):
-            errs.append(f"Constant LHS: RHS indices {rhs_free} must match forall indices {forall}")
+            errs.append(f"LHS constante: índices RHS {rhs_free} deben coincidir con forall {forall}")
     elif not lc and rc:
         if sorted(lhs_free) != sorted(forall):
-            errs.append(f"Constant RHS: LHS indices {lhs_free} must match forall indices {forall}")
+            errs.append(f"RHS constante: índices LHS {lhs_free} deben coincidir con forall {forall}")
     elif lc and rc and forall:
-        errs.append(f"Both sides are constant, but forall indices were defined: {forall}")
+        errs.append(f"Ambos lados constantes pero hay forall {forall}")
     return errs
 
 def validate_linearity(spec: dict) -> list[str]:
@@ -595,14 +454,14 @@ def validate_linearity(spec: dict) -> list[str]:
         for i, t in enumerate(terms, 1):
             nv = sum(1 for f in t.get("factors", []) if f["type"] == "object" and f.get("kind") == "variable")
             if nv > 1:
-                errs.append(f"{ctx} term {i}: {nv} variables are multiplied together → nonlinear expression")
+                errs.append(f"{ctx} término {i}: {nv} variables en un producto → no lineal")
     obj = spec.get("objective")
     if obj:
-        chk(obj.get("terms", []), "Objective")
+        chk(obj.get("terms", []), "FO")
     for r, fam in enumerate(spec.get("constraints", []), 1):
         name = fam.get("name", f"R{r}")
-        chk(fam.get("lhs_terms", []), f"Constraint {name} LHS")
-        chk(fam.get("rhs_terms", []), f"Constraint {name} RHS")
+        chk(fam.get("lhs_terms", []), f"Restricción {name} LHS")
+        chk(fam.get("rhs_terms", []), f"Restricción {name} RHS")
     return errs
 
 # ============================================================
@@ -620,14 +479,14 @@ SOLVER_OPTIONS = {
 def solver_factory_from_label(label: str):
     solver_name = SOLVER_OPTIONS.get(label)
     if solver_name is None:
-        raise ValueError(f"Unsupported solver: {label}")
+        raise ValueError(f"Solver no soportado: {label}")
     solver = pyo.SolverFactory(solver_name)
     try:
         available = solver.available(exception_flag=False)
     except TypeError:
         available = solver.available()
     if not available:
-        raise RuntimeError(f"Solver `{solver_name}` is not available in this environment.")
+        raise RuntimeError(f"El solver `{solver_name}` no está disponible en este entorno.")
     return solver_name, solver
 
 def _get_val(model, f: dict, env: dict):
@@ -641,21 +500,14 @@ def _get_val(model, f: dict, env: dict):
     return comp[key[0]] if len(key) == 1 else comp[key]
 
 def _eval_term(model, t: dict, env: dict):
-    sums = _term_sums(t)
-    idx_specs = getattr(model, "_idx_specs")
-
     def recurse(pos, local_env):
-        if pos == len(sums):
+        if pos == len(t.get("sum_over", [])):
             val = 1
             for f in t.get("factors", []):
                 val = val * _get_val(model, f, local_env)
             return (-val) if t.get("sign") == "-" else val
-
-        sum_spec = sums[pos]
-        idx = sum_spec["index"]
-        values = _sum_values(sum_spec, local_env, idx_specs)
-        return sum(recurse(pos + 1, {**local_env, idx: v}) for v in values)
-
+        idx = t["sum_over"][pos]
+        return sum(recurse(pos + 1, {**local_env, idx: v}) for v in getattr(model, f"set_{idx}"))
     return recurse(0, dict(env))
 
 def _build_expr(model, terms: list[dict], env: dict):
@@ -664,7 +516,6 @@ def _build_expr(model, terms: list[dict], env: dict):
 def build_pyomo_model(spec: dict):
     m = pyo.ConcreteModel()
     idx_specs = spec["indices"]
-    m._idx_specs = idx_specs
 
     for n, s in idx_specs.items():
         setattr(m, f"set_{n}", pyo.Set(initialize=s["elements"], ordered=True))
@@ -757,73 +608,49 @@ def hero(title: str, text: str):
 def kpi_card(title: str, value: Any):
     st.markdown(f'<div class="kpi-card"><div class="kpi-title">{title}</div><div class="kpi-value">{value}</div></div>', unsafe_allow_html=True)
 
-def section_box(subtitle: str, text: str = "", instructions: str = ""):
-    safe_tip = (instructions or "").replace('"', '&quot;')
-    tip = f'<span class="help-tip" title="{safe_tip}">?</span>' if instructions else ""
-    st.markdown(
-        f'<div class="section-box"><b style="font-size:1.1rem">{subtitle}</b>{tip}'
-        + (f'<p style="color:#d7e6ff;margin-top:6px">{text}</p>' if text else "")
-        + '</div>',
-        unsafe_allow_html=True
-    )
+def section_box(subtitle: str, text: str = ""):
+    st.markdown(f'<div class="section-box"><b style="font-size:1.1rem">{subtitle}</b>'
+                + (f'<p style="color:#d7e6ff;margin-top:6px">{text}</p>' if text else "") + '</div>', unsafe_allow_html=True)
 
 def _rand_controls(key_prefix: str) -> tuple[float, float, bool, int]:
     c1, c2, c3, c4 = st.columns(4)
-    lo = c1.number_input("Minimum", value=0.0, key=f"{key_prefix}_lo", help="Smallest value allowed in the random generation range.")
-    hi = c2.number_input("Maximum", value=10.0, key=f"{key_prefix}_hi", help="Largest value allowed in the random generation range.")
-    integer = c3.checkbox("Integer values", value=False, key=f"{key_prefix}_int", help="Generate integer values instead of continuous values.")
-    seed = int(c4.number_input("Seed", value=123, step=1, key=f"{key_prefix}_seed", help="Use the same seed to reproduce the same random values."))
+    lo = c1.number_input("Mínimo", value=0.0, key=f"{key_prefix}_lo")
+    hi = c2.number_input("Máximo", value=10.0, key=f"{key_prefix}_hi")
+    integer = c3.checkbox("Entero", value=False, key=f"{key_prefix}_int")
+    seed = int(c4.number_input("Semilla", value=123, step=1, key=f"{key_prefix}_seed"))
     return lo, hi, integer, seed
 
 def build_factor_ui(t_key: str, f_idx: int, old_factor: dict | None, catalog: list[dict], label_map: dict, default_type="object") -> dict | None:
     cfa, cfb, cfc = st.columns([1.5, 2.5, 2])
     ftype = cfa.selectbox(
-        f"Factor type {f_idx+1}", ["object", "constant"],
+        f"Tipo factor {f_idx+1}", ["object", "constant"],
         index=0 if (old_factor or {}).get("type", default_type) == "object" else 1,
-        format_func=lambda x: "Parameter / Variable" if x == "object" else "Constant",
-        key=f"{t_key}_ftype_{f_idx}",
-        help="Choose whether this factor is a model object or a numeric constant."
+        format_func=lambda x: "Parámetro/Variable" if x == "object" else "Constante",
+        key=f"{t_key}_ftype_{f_idx}"
     )
     if ftype == "object":
         labels = [o["label"] for o in catalog]
         if not labels:
-            st.error("No parameters or variables are available.")
+            st.error("No hay parámetros ni variables disponibles.")
             return None
         default_lbl = labels[0]
         if old_factor and old_factor.get("type") == "object" and old_factor.get("label") in labels:
             default_lbl = old_factor["label"]
-        chosen = cfb.selectbox(
-            f"Object {f_idx+1}", labels, index=labels.index(default_lbl), key=f"{t_key}_fobj_{f_idx}",
-            help="Select the parameter or decision variable used in this product."
-        )
+        chosen = cfb.selectbox(f"Objeto {f_idx+1}", labels, index=labels.index(default_lbl), key=f"{t_key}_fobj_{f_idx}")
         item = label_map[chosen]
-        cfc.write(f"Indices: {', '.join(item['indices']) or 'none'}")
+        cfc.write(f"Índices: {', '.join(item['indices']) or 'ninguno'}")
         return {"type": "object", "kind": item["kind"], "name": item["name"], "indices": item["indices"], "label": item["label"]}
     else:
         dval = float((old_factor or {}).get("value", 0.0)) if (old_factor or {}).get("type") == "constant" else 0.0
-        val = cfb.number_input(
-            f"Constant {f_idx+1}", value=dval, key=f"{t_key}_fconst_{f_idx}",
-            help="Enter the numeric coefficient or constant used in this product."
-        )
+        val = cfb.number_input(f"Constante {f_idx+1}", value=dval, key=f"{t_key}_fconst_{f_idx}")
         return {"type": "constant", "value": float(val)}
 
 def build_term_ui(t_key: str, t_idx: int, old_term: dict | None, catalog: list[dict], label_map: dict, idx_names: list[str], default_const_type="object") -> dict:
-    old = old_term or {}
-    old_sums = _term_sums(old)
-
     c1, c2, c3 = st.columns([1, 2, 2])
-    sign = c1.selectbox(
-        f"Sign {t_idx+1}", ["+", "-"], index=0 if old.get("sign", "+") == "+" else 1, key=f"{t_key}_sign",
-        help="Select whether this term is added to or subtracted from the expression."
-    )
-    n_factors = int(c2.number_input(
-        f"Factors {t_idx+1}", min_value=1, max_value=4, value=max(1, len(old.get("factors", [])) or 2), step=1, key=f"{t_key}_nfac",
-        help="Number of factors multiplied inside this term."
-    ))
-    n_sums = int(c3.number_input(
-        f"Summations {t_idx+1}", min_value=0, max_value=max(0, len(idx_names)), value=min(len(old_sums), len(idx_names)), step=1, key=f"{t_key}_nsums",
-        help="Number of nested summations for this term. Each summation can have its own lower and upper bound."
-    ))
+    old = old_term or {}
+    sign = c1.selectbox(f"Signo {t_idx+1}", ["+", "-"], index=0 if old.get("sign", "+") == "+" else 1, key=f"{t_key}_sign")
+    n_factors = int(c2.number_input(f"Factores {t_idx+1}", min_value=1, max_value=4, value=max(1, len(old.get("factors", [])) or 2), step=1, key=f"{t_key}_nfac"))
+    sum_over = c3.multiselect(f"Sumar sobre {t_idx+1}", idx_names, default=old.get("sum_over", []), key=f"{t_key}_sumover")
 
     old_factors = old.get("factors", [])
     factors = []
@@ -832,34 +659,7 @@ def build_term_ui(t_key: str, t_idx: int, old_term: dict | None, catalog: list[d
         if f:
             factors.append(f)
 
-    sums = []
-    if n_sums:
-        st.markdown("##### Summation bounds")
-        st.caption("Bounds use index positions. Examples: `1`, `j+2`, `2*j+1`, `N_i-1`. `N_i` means the size of index `i`.")
-
-    used_sum_indices = []
-    for si in range(n_sums):
-        old_sum = old_sums[si] if si < len(old_sums) else {}
-        default_idx = old_sum.get("index") if old_sum.get("index") in idx_names else (idx_names[si] if si < len(idx_names) else idx_names[0])
-        a, b, c = st.columns([1.2, 1.8, 1.8])
-        idx = a.selectbox(
-            f"Sum index {si+1}", idx_names, index=idx_names.index(default_idx), key=f"{t_key}_sumidx_{si}",
-            help="Index iterated by this summation. Nested summations are evaluated from top to bottom."
-        )
-        lower = b.text_input(
-            f"Lower bound {si+1}", value=str(old_sum.get("lower", "1")), key=f"{t_key}_sumlo_{si}",
-            help="Inclusive lower position. It may depend on a free or outer index, e.g. `j+2`."
-        ).strip()
-        upper = c.text_input(
-            f"Upper bound {si+1}", value=str(old_sum.get("upper", f"N_{idx}")), key=f"{t_key}_sumhi_{si}",
-            help=f"Inclusive upper position. Use `N_{idx}` for the full size of index `{idx}`."
-        ).strip()
-        if idx in used_sum_indices:
-            st.error(f"Index `{idx}` is already used by another summation in this term.")
-        used_sum_indices.append(idx)
-        sums.append({"index": idx, "lower": lower or "1", "upper": upper or f"N_{idx}"})
-
-    term = {"sign": sign, "factors": factors, "sums": sums}
+    term = {"sign": sign, "factors": factors, "sum_over": sum_over}
     st.latex(term_latex(term))
     return term
 
@@ -888,13 +688,13 @@ n_con = count_expanded(spec, "constraints")
 
 st.sidebar.markdown("""
 <div style="padding:.4rem 0 1rem;border-bottom:1px solid rgba(61,132,255,.18);margin-bottom:1rem">
-    <div style="font-size:1.45rem;font-weight:800;color:#fff;margin-bottom:.35rem">Navigation</div>
-    <div style="color:#b9c9e8;font-size:.92rem">Build, validate, and solve the model step by step.</div>
+    <div style="font-size:1.45rem;font-weight:800;color:#fff;margin-bottom:.35rem">Navegación</div>
+    <div style="color:#b9c9e8;font-size:.92rem">Explora cada etapa de construcción y solución.</div>
 </div>""", unsafe_allow_html=True)
 
-section = st.sidebar.radio("Go to:", ["Data Input", "Model Definition", "Model Outputs"], index=0)
+section = st.sidebar.radio("Ir a:", ["Ingreso de información", "Definición del modelo", "Salidas del modelo"], index=0)
 st.sidebar.markdown("---")
-st.sidebar.markdown('<div style="font-size:1.05rem;font-weight:800;color:#fff;margin-bottom:.8rem">Current status</div>', unsafe_allow_html=True)
+st.sidebar.markdown('<div style="font-size:1.05rem;font-weight:800;color:#fff;margin-bottom:.8rem">Estado actual</div>', unsafe_allow_html=True)
 
 def _sb_kpi(label, value):
     return f"""<div style="background:linear-gradient(135deg,rgba(8,22,55,.95),rgba(3,10,28,.98));
@@ -903,34 +703,34 @@ def _sb_kpi(label, value):
         <div style="font-size:1.8rem;color:#fff;font-weight:800">{value}</div></div>"""
 
 c1, c2 = st.sidebar.columns(2)
-c1.markdown(_sb_kpi("Indices", n_idx), unsafe_allow_html=True)
+c1.markdown(_sb_kpi("Índices", n_idx), unsafe_allow_html=True)
 c2.markdown(_sb_kpi("Variables", n_var), unsafe_allow_html=True)
-st.sidebar.markdown(_sb_kpi("Defined constraints", n_con), unsafe_allow_html=True)
+st.sidebar.markdown(_sb_kpi("Restricciones definidas", n_con), unsafe_allow_html=True)
 
 # ============================================================
 # MAIN
 # ============================================================
-st.title("Linear Model Solver")
-st.caption("Application for building and solving single-objective linear models.")
+st.title("Solucionador de Modelos Lineales")
+st.caption("Aplicación para solucionar modelos lineales con un solo objetivo.")
 
 # ============================================================
-# SECTION 1: DATA INPUT
+# SECTION 1: INGRESO DE INFORMACIÓN
 # ============================================================
-if section == "Data Input":
-    hero("1. Data Input", "Define the model indices, parameters, and decision variables.")
+if section == "Ingreso de información":
+    hero("1. Ingreso de información", "Define los índices, parámetros y variables del modelo.")
 
     c1, c2, c3 = st.columns(3)
-    with c1: kpi_card("Indices", len(spec["indices"]))
-    with c2: kpi_card("Parameters", len(spec["parameters"]))
+    with c1: kpi_card("Índices", len(spec["indices"]))
+    with c2: kpi_card("Parámetros", len(spec["parameters"]))
     with c3: kpi_card("Variables", len(spec["variables"]))
 
     st.markdown("<br>", unsafe_allow_html=True)
-    tab_ind, tab_par, tab_var = st.tabs(["Indices", "Parameters", "Variables"])
+    tab_ind, tab_par, tab_var = st.tabs(["Índices", "Parámetros", "Variables"])
 
-    # -- INDICES --
+    # -- ÍNDICES --
     with tab_ind:
-        section_box("Index Configuration", "Define the base index sets used by parameters, variables, and constraints.", "Create each index with a symbolic name and a finite size. Elements are internally ordered from position 1 to N.")
-        n = st.number_input("Number of indices", 1, 10, max(1, len(spec["indices"]) or 3), step=1, key="num_indices")
+        section_box("Configuración de índices", "Define los conjuntos base del modelo.")
+        n = st.number_input("Número de índices", 1, 10, max(1, len(spec["indices"]) or 3), step=1, key="num_indices")
         existing_names = list(spec["indices"].keys())
 
         idx_specs_new, errors = {}, []
@@ -939,12 +739,12 @@ if section == "Data Input":
             default_name = existing_names[r] if r < len(existing_names) else f"idx_{r+1}"
             default_size = spec["indices"].get(default_name, {}).get("size", 3)
             col1, col2 = st.columns(2)
-            name = col1.text_input(f"Name {r+1}", value=default_name, key=f"idx_name_{r}").strip()
-            size = int(col2.number_input(f"Size of {name or f'index {r+1}'}", 1, 1000, int(default_size), step=1, key=f"idx_size_{r}"))
+            name = col1.text_input(f"Nombre {r+1}", value=default_name, key=f"idx_name_{r}").strip()
+            size = int(col2.number_input(f"Tamaño de {name or f'idx {r+1}'}", 1, 1000, int(default_size), step=1, key=f"idx_size_{r}"))
             if not valid_sym(name):
-                errors.append(f"`{name}` is not a valid name.")
+                errors.append(f"`{name}` no es nombre válido.")
             elif name in used:
-                errors.append(f"Index `{name}` is duplicated.")
+                errors.append(f"Índice `{name}` repetido.")
             else:
                 used.add(name)
                 idx_specs_new[name] = {"size": size, "elements": idx_elements(size, name)}
@@ -959,27 +759,26 @@ if section == "Data Input":
             spec["variables"] = {k: v for k, v in spec["variables"].items() if all(i in valid for i in v.get("indices", []))}
 
             if idx_specs_new:
-                st.write("**Preview:**")
+                st.write("**Vista previa:**")
                 st.dataframe(pd.DataFrame([
-                    {"Index": n, "Size": s["size"], "Elements": ", ".join(s["elements"])}
+                    {"Índice": n, "Tamaño": s["size"], "Elementos": ", ".join(s["elements"])}
                     for n, s in idx_specs_new.items()
                 ]), use_container_width=True, hide_index=True)
 
-    # -- PARAMETERS --
+    # -- PARÁMETROS --
     with tab_par:
         section_box(
-            "Parameter Configuration",
-            "Define parameters manually, load them from Excel/CSV, or generate random values.",
-            "Choose the parameter signature first. For large parameter arrays, Excel/CSV or random generation is recommended."
+            "Configuración de parámetros",
+            "Define parámetros manualmente, por carga desde Excel/CSV o con generación aleatoria."
         )
         idx_specs = spec["indices"]
 
         if not idx_specs:
-            st.info("Define valid indices first.")
+            st.info("Primero define índices válidos.")
         else:
             cur = spec["parameters"]
             n_p = int(st.number_input(
-                "Number of parameters",
+                "Número de parámetros",
                 0,
                 30,
                 max(1, len(cur)) if cur else 1,
@@ -991,7 +790,7 @@ if section == "Data Input":
             old_names = list(cur.keys())
 
             if n_p == 0:
-                st.info("No parameters defined.")
+                st.info("Sin parámetros definidos.")
 
             for p in range(n_p):
                 old_name = old_names[p] if p < len(old_names) else f"param_{p+1}"
@@ -1003,19 +802,17 @@ if section == "Data Input":
                 preview_indices = [idx for idx in preview_indices if idx in idx_specs]
                 preview_ne = total_elems(preview_indices, idx_specs)
 
-                preview_modes = ["Manual", "Excel/CSV", "Random"] if preview_ne <= 12 else ["Excel/CSV", "Random"]
+                preview_modes = ["Manual", "Excel/CSV", "Aleatorio"] if preview_ne <= 12 else ["Excel/CSV", "Aleatorio"]
                 preview_mode = st.session_state.get(f"pmode_{p}", old_record.get("mode", preview_modes[0]))
                 if preview_mode == "Excel":
                     preview_mode = "Excel/CSV"
-                if preview_mode == "Aleatorio":
-                    preview_mode = "Random"
                 if preview_mode not in preview_modes:
                     preview_mode = preview_modes[0]
 
                 preview_label = (
-                    f"Parameter {p+1}: {preview_name} — "
+                    f"Parámetro {p+1}: {preview_name} — "
                     f"{sig(preview_name, preview_indices)} — "
-                    f"{preview_ne} element(s) — {preview_mode}"
+                    f"{preview_ne} elemento(s) — {preview_mode}"
                 )
                 expanded = (
                     st.session_state.get("parameter_expander_abierto") == p or
@@ -1023,17 +820,17 @@ if section == "Data Input":
                 )
 
                 with st.expander(preview_label, expanded=expanded):
-                    st.markdown(f"### Parameter {p+1}")
+                    st.markdown(f"### Parámetro {p+1}")
                     col1, col2 = st.columns([2, 3])
                     pname = col1.text_input(
-                        f"Parameter name {p+1}",
+                        f"Nombre del parámetro {p+1}",
                         value=old_name,
                         key=f"pname_{p}",
                         on_change=_open_parameter,
                         args=(p,)
                     ).strip()
                     p_idxs = col2.multiselect(
-                        f"Indices of {pname}",
+                        f"Índices de {pname}",
                         idx_opts,
                         default=default_indices,
                         key=f"pidxs_{p}",
@@ -1042,27 +839,25 @@ if section == "Data Input":
                     )
 
                     if not valid_sym(pname):
-                        st.error(f"`{pname}` is not valid.")
+                        st.error(f"`{pname}` no válido.")
                         continue
                     if pname in new_params:
-                        st.error(f"`{pname}` is duplicated.")
+                        st.error(f"`{pname}` repetido.")
                         continue
 
                     ne = total_elems(p_idxs, idx_specs)
                     st.write(f"**Firma:** `{sig(pname, p_idxs)}`")
-                    st.write(f"**Total number of elements:** `{ne}`")
+                    st.write(f"**Número total de elementos:** `{ne}`")
 
-                    modes = ["Manual", "Excel/CSV", "Random"] if ne <= 12 else ["Excel/CSV", "Random"]
+                    modes = ["Manual", "Excel/CSV", "Aleatorio"] if ne <= 12 else ["Excel/CSV", "Aleatorio"]
                     old_mode = old_record.get("mode", modes[0])
                     if old_mode == "Excel":
                         old_mode = "Excel/CSV"
-                    if old_mode == "Aleatorio":
-                        old_mode = "Random"
                     if old_mode not in modes:
                         old_mode = modes[0]
 
                     mode = st.radio(
-                        f"Input mode for {pname}",
+                        f"Modo de carga para {pname}",
                         modes,
                         index=modes.index(old_mode),
                         horizontal=True,
@@ -1078,7 +873,7 @@ if section == "Data Input":
                     if mode == "Manual":
                         if not p_idxs:
                             value = st.number_input(
-                                f"Value of {pname}",
+                                f"Valor {pname}",
                                 value=scalar_get(current_values),
                                 key=f"pscalar_{p}",
                                 on_change=_open_parameter,
@@ -1120,24 +915,24 @@ if section == "Data Input":
                     elif mode == "Excel/CSV":
                         record["values"] = parameter_template_controls(p, pname, p_idxs, idx_specs, current_values)
 
-                    else:  # Random
+                    else:  # Aleatorio
                         if not p_idxs:
                             lo, hi, intg, seed = _rand_controls(f"ps_{p}")
                             if lo > hi:
-                                st.error("Minimum > maximum.")
+                                st.error("Mínimo > máximo.")
                                 continue
-                            if st.button(f"Generate {pname}", key=f"pgen_{p}", on_click=_open_parameter, args=(p,)):
+                            if st.button(f"Generar {pname}", key=f"pgen_{p}", on_click=_open_parameter, args=(p,)):
                                 current_values = _set_param_values(p, rand_scalar(lo, hi, intg, seed))
-                            st.write(f"Value: **{scalar_get(current_values):.4f}**")
+                            st.write(f"Valor: **{scalar_get(current_values):.4f}**")
                             record["values"] = dict(current_values)
 
                         else:
                             lo, hi, intg, seed = _rand_controls(f"prand_{p}")
                             if lo > hi:
-                                st.error("Minimum > maximum.")
+                                st.error("Mínimo > máximo.")
                                 continue
                             clist = combos(p_idxs, idx_specs)
-                            if st.button(f"Generate values for {pname}", key=f"pgen_{p}", on_click=_open_parameter, args=(p,)):
+                            if st.button(f"Generar valores de {pname}", key=f"pgen_{p}", on_click=_open_parameter, args=(p,)):
                                 current_values = _set_param_values(p, rand_vals(clist, lo, hi, intg, seed))
                             record["values"] = dict(current_values)
                             st.dataframe(
@@ -1146,7 +941,7 @@ if section == "Data Input":
                                 hide_index=True
                             )
 
-                    st.markdown("#### Parameter preview")
+                    st.markdown("#### Vista previa del parámetro")
                     st.dataframe(
                         template_df_for_parameter(p_idxs, idx_specs, record["values"]),
                         use_container_width=True,
@@ -1159,11 +954,11 @@ if section == "Data Input":
 
             if new_params:
                 st.markdown("---")
-                st.markdown("### Saved parameters")
+                st.markdown("### Parámetros guardados")
                 for i, (name, param) in enumerate(new_params.items()):
                     title = (
-                        f"Parameter {i+1}: {sig(name, param['indices'])} — "
-                        f"{total_elems(param['indices'], idx_specs)} element(s) — {param['mode']}"
+                        f"Parámetro {i+1}: {sig(name, param['indices'])} — "
+                        f"{total_elems(param['indices'], idx_specs)} elemento(s) — {param['mode']}"
                     )
                     with st.expander(title, expanded=False):
                         st.dataframe(
@@ -1174,14 +969,14 @@ if section == "Data Input":
 
     # -- VARIABLES --
     with tab_var:
-        section_box("Variable Configuration", "Define decision variables, their indices, and their domains.", "Assign each variable the indices that determine its dimensions, then choose its mathematical domain.")
+        section_box("Configuración de variables", "Variables de decisión y su dominio.")
         idx_specs = spec["indices"]
 
         if not idx_specs:
-            st.info("Define valid indices first.")
+            st.info("Primero define índices válidos.")
         else:
             cur = spec["variables"]
-            n_v = int(st.number_input("Number of variables", 0, 30, max(1, len(cur)) if cur else 1, step=1, key="num_vars"))
+            n_v = int(st.number_input("Número de variables", 0, 30, max(1, len(cur)) if cur else 1, step=1, key="num_vars"))
             idx_opts = list(idx_specs.keys())
             dom_opts = ["Binary", "NonNegativeReals", "NonNegativeIntegers"]
             new_vars = {}
@@ -1191,75 +986,65 @@ if section == "Data Input":
                 old_names = list(cur.keys())
                 old_name = old_names[v] if v < len(old_names) else f"x_{v+1}"
                 col1, col2, col3 = st.columns([2, 3, 2])
-                vname = col1.text_input(f"Name {v+1}", value=old_name, key=f"vname_{v}").strip()
-                v_idxs = col2.multiselect(f"Indices of {vname}", idx_opts, default=cur.get(old_name, {}).get("indices", []), key=f"vidxs_{v}")
+                vname = col1.text_input(f"Nombre {v+1}", value=old_name, key=f"vname_{v}").strip()
+                v_idxs = col2.multiselect(f"Índices de {vname}", idx_opts, default=cur.get(old_name, {}).get("indices", []), key=f"vidxs_{v}")
                 old_dom = cur.get(old_name, {}).get("domain", "NonNegativeReals")
-                v_dom = col3.selectbox(f"Domain of {vname}", dom_opts, index=dom_opts.index(old_dom if old_dom in dom_opts else "NonNegativeReals"), key=f"vdom_{v}")
+                v_dom = col3.selectbox(f"Dominio {vname}", dom_opts, index=dom_opts.index(old_dom if old_dom in dom_opts else "NonNegativeReals"), key=f"vdom_{v}")
 
-                if not valid_sym(vname): st.error(f"`{vname}` is not valid."); continue
-                if vname in new_vars: st.error(f"`{vname}` is duplicated."); continue
+                if not valid_sym(vname): st.error(f"`{vname}` no válido."); continue
+                if vname in new_vars: st.error(f"`{vname}` repetido."); continue
                 new_vars[vname] = {"indices": v_idxs, "domain": v_dom}
 
             spec["variables"] = new_vars
             if new_vars:
-                st.write("**Summary:**")
+                st.write("**Resumen:**")
                 st.dataframe(pd.DataFrame([
-                    {"Variable": sig(n, v["indices"]), "Domain": DOMAIN_LABELS.get(v["domain"], v["domain"]), "Components": total_elems(v["indices"], idx_specs)}
+                    {"Variable": sig(n, v["indices"]), "Dominio": DOMAIN_LABELS.get(v["domain"], v["domain"]), "Componentes": total_elems(v["indices"], idx_specs)}
                     for n, v in new_vars.items()
                 ]), use_container_width=True, hide_index=True)
 
 # ============================================================
-# SECTION 2: MODEL DEFINITION
+# SECTION 2: DEFINICIÓN DEL MODELO
 # ============================================================
-elif section == "Model Definition":
-    hero("2. Model Definition", "Build the objective function, constraint families, and mathematical representation.")
+elif section == "Definición del modelo":
+    hero("2. Definición del modelo", "Función objetivo, restricciones y modelo matemático.")
     idx_specs = spec["indices"]
 
     if not idx_specs:
-        st.warning("Define at least one index first.")
+        st.warning("Primero define al menos un índice.")
     elif not spec["variables"]:
-        st.warning("Define at least one variable first.")
+        st.warning("Primero define al menos una variable.")
     else:
         catalog, label_map = object_catalog(spec)
         idx_names = list(idx_specs.keys())
-        tab_obj, tab_rest, tab_math = st.tabs(["Objective Function", "Constraints", "Mathematical Model"])
+        tab_obj, tab_rest, tab_math = st.tabs(["Función Objetivo", "Restricciones", "Modelo matemático"])
 
-        # -- OBJECTIVE FUNCTION --
+        # -- FUNCIÓN OBJETIVO --
         with tab_obj:
-            section_box(
-                "Objective Function",
-                "Combine parameters, variables, constants, and summations to define the single objective.",
-                "Every free index in the objective must be eliminated by a summation. Dynamic summation bounds may use expressions such as j+2 or 2*j+1."
-            )
             cur_obj = spec.get("objective") or {}
             sense_opts = ["minimize", "maximize"]
-            sense = st.radio("Objective sense:", sense_opts, index=sense_opts.index(cur_obj.get("sense", "minimize")), horizontal=True, key="obj_sense", help="Choose whether the objective function is minimized or maximized.")
+            sense = st.radio("Objetivo:", sense_opts, index=sense_opts.index(cur_obj.get("sense", "minimize")), horizontal=True, key="obj_sense")
             old_terms = cur_obj.get("terms", [])
-            n_terms = int(st.number_input("Objective terms", 1, 20, max(1, len(old_terms) or 1), step=1, key="n_obj_terms", help="Number of additive/subtractive terms in the objective function."))
+            n_terms = int(st.number_input("Términos en la FO", 1, 20, max(1, len(old_terms) or 1), step=1, key="n_obj_terms"))
             obj_terms = []
             for t in range(n_terms):
-                st.markdown(f"#### Objective term {t+1}")
+                st.markdown(f"#### Término FO {t+1}")
                 term = build_term_ui(f"obj_t{t}", t, old_terms[t] if t < len(old_terms) else None, catalog, label_map, idx_names)
                 obj_terms.append(term)
 
-            errs = validate_obj(obj_terms, idx_names)
+            errs = validate_obj(obj_terms)
             for e in errs: st.error(e)
-            if not errs: st.success("Objective function is structurally consistent.")
+            if not errs: st.success("Función objetivo estructuralmente consistente.")
             spec["objective"] = {"sense": sense, "terms": obj_terms}
 
-        # -- CONSTRAINTS --
+        # -- RESTRICCIONES --
         with tab_rest:
-            section_box(
-                "Constraint Families",
-                "Define indexed constraint families by building the left-hand side, operator, and right-hand side.",
-                "Use For all for the free indices of the family. Inside each term, summation bounds can depend on those free indices, for example sum from i=j+2 to N_i."
-            )
             old_fams = spec.get("constraints", [])
-            n_fams = int(st.number_input("Constraint families", 0, 30, len(old_fams), step=1, key="n_fams", help="Number of algebraic constraint families in the model."))
+            n_fams = int(st.number_input("Familias de restricciones", 0, 30, len(old_fams), step=1, key="n_fams"))
             new_fams = []
 
             if n_fams == 0:
-                st.info("No constraints defined.")
+                st.info("Sin restricciones definidas.")
 
             for r in range(n_fams):
                 old_fam = old_fams[r] if r < len(old_fams) else None
@@ -1273,110 +1058,100 @@ elif section == "Model Definition":
                     "lhs_terms": (old_fam or {}).get("lhs_terms", []),
                     "rhs_terms": (old_fam or {}).get("rhs_terms", []),
                 }
-                fam_label = f"Family {r+1}: {preview['name']} — {family_latex(preview)}"
+                fam_label = f"Familia {r+1}: {preview['name']} — {family_latex(preview)}"
                 expanded = (st.session_state.get("constraint_family_expander_abierto") == r or
                             (st.session_state.get("constraint_family_expander_abierto") is None and r == 0))
 
                 with st.expander(fam_label, expanded=expanded):
-                    st.markdown(f"### Family {r+1}")
+                    st.markdown(f"### Familia {r+1}")
                     cf1, cf2, cf3 = st.columns(3)
-                    fname = cf1.text_input(f"Family name {r+1}", value=default_name, key=f"cfname_{r}", on_change=_open_family, args=(r,), help="Use a short symbolic name such as Capacity or Balance.").strip()
-                    forall = cf2.multiselect(f"For all indices in {fname}", idx_names, default=(old_fam or {}).get("forall", []), key=f"cfforall_{r}", on_change=_open_family, args=(r,), help="Select the free indices that define this constraint family.")
-                    sense_f = cf3.selectbox(f"Operator for {fname}", ["<=", ">=", "="], index=["<=", ">=", "="].index((old_fam or {}).get("sense", "<=")), key=f"cfsense_{r}", on_change=_open_family, args=(r,), help="Choose the relational operator between the left-hand and right-hand sides.")
+                    fname = cf1.text_input(f"Nombre familia {r+1}", value=default_name, key=f"cfname_{r}", on_change=_open_family, args=(r,)).strip()
+                    forall = cf2.multiselect(f"Para todo en {fname}", idx_names, default=(old_fam or {}).get("forall", []), key=f"cfforall_{r}", on_change=_open_family, args=(r,))
+                    sense_f = cf3.selectbox(f"Operador {fname}", ["<=", ">=", "="], index=["<=", ">=", "="].index((old_fam or {}).get("sense", "<=")), key=f"cfsense_{r}", on_change=_open_family, args=(r,))
 
-                    if not valid_sym(fname): st.error(f"`{fname}` is not valid."); continue
+                    if not valid_sym(fname): st.error(f"`{fname}` no válido."); continue
 
                     colL, colR = st.columns(2)
                     old_lhs = (old_fam or {}).get("lhs_terms", [])
                     old_rhs = (old_fam or {}).get("rhs_terms", [])
 
                     with colL:
-                        st.markdown(f"#### LHS of {fname}")
-                        n_lhs = int(st.number_input(f"LHS terms for {fname}", 0, 10, len(old_lhs), step=1, key=f"nlhs_{r}", on_change=_open_family, args=(r,)))
+                        st.markdown(f"#### LHS de {fname}")
+                        n_lhs = int(st.number_input(f"Términos LHS {fname}", 0, 10, len(old_lhs), step=1, key=f"nlhs_{r}", on_change=_open_family, args=(r,)))
                         lhs_terms = [build_term_ui(f"lhs_{r}_{t}", t, old_lhs[t] if t < len(old_lhs) else None, catalog, label_map, idx_names) for t in range(n_lhs)]
 
                     with colR:
-                        st.markdown(f"#### RHS of {fname}")
-                        n_rhs = int(st.number_input(f"RHS terms for {fname}", 0, 10, len(old_rhs), step=1, key=f"nrhs_{r}", on_change=_open_family, args=(r,)))
+                        st.markdown(f"#### RHS de {fname}")
+                        n_rhs = int(st.number_input(f"Términos RHS {fname}", 0, 10, len(old_rhs), step=1, key=f"nrhs_{r}", on_change=_open_family, args=(r,)))
                         rhs_terms = [build_term_ui(f"rhs_{r}_{t}", t, old_rhs[t] if t < len(old_rhs) else None, catalog, label_map, idx_names, default_const_type="constant") for t in range(n_rhs)]
 
                     family_record = {"name": fname, "forall": forall, "sense": sense_f, "lhs_terms": lhs_terms, "rhs_terms": rhs_terms}
-                    st.markdown(f"### Preview — {fname}")
+                    st.markdown(f"### Vista previa — {fname}")
                     st.latex(family_latex(family_record))
-                    fam_errs = validate_family(family_record, idx_names)
+                    fam_errs = validate_family(family_record)
                     for e in fam_errs: st.error(e)
-                    if not fam_errs: st.success("Constraint family is structurally consistent.")
+                    if not fam_errs: st.success("Familia estructuralmente consistente.")
                     new_fams.append(family_record)
 
             spec["constraints"] = new_fams
 
             if new_fams:
                 st.markdown("---")
-                st.markdown("### Saved constraint families")
+                st.markdown("### Familias guardadas")
                 for i, fam in enumerate(new_fams):
-                    with st.expander(f"Family {i+1}: {fam.get('name')} — {family_latex(fam)}", expanded=False):
+                    with st.expander(f"Familia {i+1}: {fam.get('name')} — {family_latex(fam)}", expanded=False):
                         st.latex(family_latex(fam))
 
-        # -- MATHEMATICAL MODEL --
+        # -- MODELO MATEMÁTICO --
         with tab_math:
-            section_box(
-                "Mathematical Model",
-                "Review the complete algebraic model before solving it.",
-                "Check the objective, constraint families, quantifiers, and dynamic summation bounds exactly as they will be interpreted by the solver."
-            )
-            st.markdown("### Structured model")
+            st.markdown("### Modelo estructurado")
             obj = spec.get("objective")
             if obj:
                 symbol = r"\min" if obj["sense"] == "minimize" else r"\max"
                 st.latex(rf"{symbol}\ Z = {expr_latex(obj['terms'])}")
             else:
-                st.info("No objective function defined.")
-            st.markdown("**Subject to:**")
+                st.info("Sin función objetivo definida.")
+            st.markdown("**Sujeto a:**")
             if not spec["constraints"]:
-                st.info("No constraints defined.")
+                st.info("Sin restricciones definidas.")
             else:
                 for fam in spec["constraints"]:
                     st.latex(family_latex(fam))
 
 # ============================================================
-# SECTION 3: MODEL OUTPUTS
+# SECTION 3: SALIDAS DEL MODELO
 # ============================================================
-elif section == "Model Outputs":
-    hero("3. Model Outputs", "Solve the model and inspect the optimal objective value and decision variables.")
+elif section == "Salidas del modelo":
+    hero("3. Resultados", "Solución óptima y configuración de las variables.")
 
     # Validate
     errs = []
     if not spec["objective"]:
-        errs.append("No objective function defined.")
+        errs.append("Sin función objetivo.")
     else:
-        errs.extend(validate_obj(spec["objective"].get("terms", []), list(spec["indices"].keys())))
+        errs.extend(validate_obj(spec["objective"].get("terms", [])))
     for fam in spec.get("constraints", []):
-        errs.extend(validate_family(fam, list(spec["indices"].keys())))
+        errs.extend(validate_family(fam))
     errs.extend(validate_linearity(spec))
-    if not spec["variables"]: errs.append("No variables defined.")
-    if not spec["indices"]: errs.append("No indices defined.")
+    if not spec["variables"]: errs.append("Sin variables definidas.")
+    if not spec["indices"]: errs.append("Sin índices definidos.")
 
     for e in errs: st.error(e)
     if errs: st.stop()
-    st.success("Model specification is valid.")
+    st.success("Especificación válida.")
 
-    tab_solve, tab_vars = st.tabs(["Solve", "Solution Variables"])
+    tab_solve, tab_vars = st.tabs(["Resolver", "Variables solución"])
 
     with tab_solve:
-        section_box(
-            "Solve Model",
-            "Validate the model, select an available solver, and compute the solution.",
-            "The application currently supports linear models. Products containing more than one decision variable are rejected as nonlinear."
-        )
-        st.subheader("Solve model")
+        st.subheader("Resolver modelo")
         solver_label = st.selectbox(
             "Solver",
             list(SOLVER_OPTIONS.keys()),
             index=0,
-            help="HiGHS is the recommended option for continuous, integer, and binary linear models."
+            help="HiGHS es la opción recomendada para modelos lineales continuos, enteros y binarios."
         )
 
-        if st.button("Solve model", type="primary"):
+        if st.button("Resolver modelo", type="primary"):
             try:
                 model = build_pyomo_model(spec)
                 solver_name, solver = solver_factory_from_label(solver_label)
@@ -1394,7 +1169,7 @@ elif section == "Model Outputs":
                     "objective_value": objective_value,
                 }
                 st.session_state["solved_model_object"] = model
-                st.success("Model solved successfully.")
+                st.success("Modelo resuelto correctamente.")
             except Exception as e:
                 st.error(f"Error: {e}")
                 st.stop()
@@ -1402,42 +1177,37 @@ elif section == "Model Outputs":
         results = spec.get("results")
         model = st.session_state.get("solved_model_object")
         if not results or not model:
-            st.info("The model has not been solved yet.")
+            st.info("Aún no has resuelto el modelo.")
         else:
             c1, c2, c3 = st.columns(3)
             with c1: kpi_card("Solver", results.get("solver_name", ""))
             with c2: kpi_card("Status", results["status"])
             with c3: kpi_card("Termination", results["termination_condition"])
             obj_val = results.get("objective_value")
-            kpi_card("Optimal value", "Not available" if obj_val is None else f"{obj_val:,.6f}")
+            kpi_card("Valor óptimo", "No disponible" if obj_val is None else f"{obj_val:,.6f}")
 
     with tab_vars:
-        section_box(
-            "Solution Variables",
-            "Inspect the value of each decision variable and export the results.",
-            "Select one variable for its full solution table or use Nonzero Variables to focus only on active decisions."
-        )
         results = spec.get("results")
         model = st.session_state.get("solved_model_object")
         if not results or not model:
-            st.info("Solve the model first.")
+            st.info("Primero resuelve el modelo.")
         else:
-            subtab_var, subtab_nz = st.tabs(["Select Variable", "Nonzero Variables"])
+            subtab_var, subtab_nz = st.tabs(["Seleccionar variable", "Variables no nulas"])
 
             with subtab_var:
-                st.subheader("Solution by variable")
+                st.subheader("Solución por variable")
                 vnames = list(spec["variables"].keys())
                 sel = st.selectbox("Variable", vnames)
                 df = var_solution_df(model, sel, spec["variables"][sel], spec["indices"])
                 st.dataframe(df, use_container_width=True, hide_index=True)
-                st.download_button("Download CSV", data=df.to_csv(index=False).encode(), file_name=f"{sel}_solution.csv", mime="text/csv")
+                st.download_button("Descargar CSV", data=df.to_csv(index=False).encode(), file_name=f"{sel}_solucion.csv", mime="text/csv")
 
             with subtab_nz:
-                st.subheader("Nonzero variables")
+                st.subheader("Variables no nulas")
                 full_df = all_vars_df(model, spec)
                 nz_df = full_df[full_df["value"].abs() > 1e-9].reset_index(drop=True) if not full_df.empty else full_df
                 if nz_df.empty:
-                    st.info("There are no nonzero variables.")
+                    st.info("No hay variables no nulas.")
                 else:
                     st.dataframe(nz_df, use_container_width=True, hide_index=True)
-                st.download_button("Download CSV", data=nz_df.to_csv(index=False).encode(), file_name="nonzero_variables.csv", mime="text/csv")
+                st.download_button("Descargar CSV", data=nz_df.to_csv(index=False).encode(), file_name="variables_no_nulas.csv", mime="text/csv")
