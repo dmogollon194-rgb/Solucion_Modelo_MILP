@@ -67,12 +67,12 @@ _EMPTY_SPEC = {
 def _init():
     if "model_spec" not in st.session_state:
         st.session_state["model_spec"] = _EMPTY_SPEC.copy()
-    if "constraint_family_expander_abierto" not in st.session_state:
-        st.session_state["constraint_family_expander_abierto"] = None
-    if "parameter_expander_abierto" not in st.session_state:
-        st.session_state["parameter_expander_abierto"] = None
-    if "objective_term_expander_abierto" not in st.session_state:
-        st.session_state["objective_term_expander_abierto"] = 0
+    if "constraint_family_expander_open" not in st.session_state:
+        st.session_state["constraint_family_expander_open"] = None
+    if "parameter_expander_open" not in st.session_state:
+        st.session_state["parameter_expander_open"] = None
+    if "objective_term_expander_open" not in st.session_state:
+        st.session_state["objective_term_expander_open"] = 0
 
 _init()
 spec = st.session_state["model_spec"]
@@ -1331,13 +1331,13 @@ def object_catalog(spec: dict) -> tuple[list[dict], dict]:
     return items, {o["label"]: o for o in items}
 
 def _open_family(r: int):
-    st.session_state["constraint_family_expander_abierto"] = r
+    st.session_state["constraint_family_expander_open"] = r
 
 def _open_parameter(p: int):
-    st.session_state["parameter_expander_abierto"] = p
+    st.session_state["parameter_expander_open"] = p
 
 def _open_objective_term(t: int):
-    st.session_state["objective_term_expander_abierto"] = t
+    st.session_state["objective_term_expander_open"] = t
 
 # ============================================================
 # SIDEBAR
@@ -1413,7 +1413,7 @@ if section == "Data Input":
 
         if not errors:
             spec["indices"] = idx_specs_new
-            # clean orphan params/vars
+            # Remove parameters and variables whose indices no longer exist
             valid = set(idx_specs_new)
             spec["parameters"] = {k: v for k, v in spec["parameters"].items() if all(i in valid for i in v.get("indices", []))}
             spec["variables"] = {k: v for k, v in spec["variables"].items() if all(i in valid for i in v.get("indices", []))}
@@ -1467,8 +1467,6 @@ if section == "Data Input":
                 preview_mode = st.session_state.get(f"pmode_{p}", old_record.get("mode", preview_modes[0]))
                 if preview_mode == "Excel":
                     preview_mode = "Excel/CSV"
-                if preview_mode == "Aleatorio":
-                    preview_mode = "Random"
                 if preview_mode not in preview_modes:
                     preview_mode = preview_modes[0]
 
@@ -1478,8 +1476,8 @@ if section == "Data Input":
                     f"{preview_ne} element(s) — {preview_mode}"
                 )
                 expanded = (
-                    st.session_state.get("parameter_expander_abierto") == p or
-                    (st.session_state.get("parameter_expander_abierto") is None and p == 0)
+                    st.session_state.get("parameter_expander_open") == p or
+                    (st.session_state.get("parameter_expander_open") is None and p == 0)
                 )
 
                 with st.expander(preview_label, expanded=expanded):
@@ -1509,15 +1507,13 @@ if section == "Data Input":
                         continue
 
                     ne = total_elems(p_idxs, idx_specs)
-                    st.write(f"**Firma:** `{sig(pname, p_idxs)}`")
+                    st.write(f"**Signature:** `{sig(pname, p_idxs)}`")
                     st.write(f"**Total number of elements:** `{ne}`")
 
                     modes = ["Manual", "Excel/CSV", "Random"] if ne <= 12 else ["Excel/CSV", "Random"]
                     old_mode = old_record.get("mode", modes[0])
                     if old_mode == "Excel":
                         old_mode = "Excel/CSV"
-                    if old_mode == "Aleatorio":
-                        old_mode = "Random"
                     if old_mode not in modes:
                         old_mode = modes[0]
 
@@ -1717,9 +1713,9 @@ elif section == "Model Definition":
                 term_title = f"Objective term {t+1} — {old_preview}"
 
                 expanded = (
-                    st.session_state.get("objective_term_expander_abierto") == t
+                    st.session_state.get("objective_term_expander_open") == t
                     or (
-                        st.session_state.get("objective_term_expander_abierto") is None
+                        st.session_state.get("objective_term_expander_open") is None
                         and t == 0
                     )
                 )
@@ -1767,8 +1763,8 @@ elif section == "Model Definition":
                     "rhs_terms": (old_fam or {}).get("rhs_terms", []),
                 }
                 fam_label = f"Family {r+1}: {preview['name']} — {family_latex(preview)}"
-                expanded = (st.session_state.get("constraint_family_expander_abierto") == r or
-                            (st.session_state.get("constraint_family_expander_abierto") is None and r == 0))
+                expanded = (st.session_state.get("constraint_family_expander_open") == r or
+                            (st.session_state.get("constraint_family_expander_open") is None and r == 0))
 
                 with st.expander(fam_label, expanded=expanded):
                     st.markdown(f"### Family {r+1}")
