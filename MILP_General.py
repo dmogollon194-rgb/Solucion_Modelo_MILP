@@ -71,6 +71,8 @@ def _init():
         st.session_state["constraint_family_expander_abierto"] = None
     if "parameter_expander_abierto" not in st.session_state:
         st.session_state["parameter_expander_abierto"] = None
+    if "objective_term_expander_abierto" not in st.session_state:
+        st.session_state["objective_term_expander_abierto"] = 0
 
 _init()
 spec = st.session_state["model_spec"]
@@ -1023,6 +1025,36 @@ def _rand_controls(key_prefix: str) -> tuple[float, float, bool, int]:
     seed = int(c4.number_input("Seed", value=123, step=1, key=f"{key_prefix}_seed", help="Use the same seed to reproduce the same random values."))
     return lo, hi, integer, seed
 
+def _objective_term_index_from_key(t_key: str) -> int | None:
+    """
+    Extract the objective-term position from keys such as:
+      obj_t0
+      obj_t1_f0
+      obj_t2_f1
+    Constraint keys return None.
+    """
+    if not t_key.startswith("obj_t"):
+        return None
+    tail = t_key[len("obj_t"):]
+    token = tail.split("_", 1)[0]
+    return int(token) if token.isdigit() else None
+
+
+def _keep_objective_term_open_kwargs(t_key: str) -> dict:
+    """
+    Callback arguments added to widgets inside an objective term.
+    When a widget changes, Streamlit reruns the script; this callback
+    records which expander must be reopened.
+    """
+    term_idx = _objective_term_index_from_key(t_key)
+    if term_idx is None:
+        return {}
+    return {
+        "on_change": _open_objective_term,
+        "args": (term_idx,),
+    }
+
+
 def build_factor_ui(
     t_key: str,
     f_idx: int,
@@ -1043,6 +1075,7 @@ def build_factor_ui(
             "Choose a parameter/variable or a numeric constant. "
             "Multiplication and division are selected between consecutive factors."
         ),
+        **_keep_objective_term_open_kwargs(t_key),
     )
 
     if ftype == "object":
@@ -1061,6 +1094,7 @@ def build_factor_ui(
             index=labels.index(default_lbl),
             key=f"{t_key}_fobj_{f_idx}",
             help="Select the parameter or decision variable used in this factor.",
+            **_keep_objective_term_open_kwargs(t_key),
         )
         item = label_map[chosen]
         st.caption(f"Indices: {', '.join(item['indices']) or 'none'}")
@@ -1082,6 +1116,7 @@ def build_factor_ui(
         value=dval,
         key=f"{t_key}_fconst_{f_idx}",
         help="Enter the numeric value used in this factor.",
+        **_keep_objective_term_open_kwargs(t_key),
     )
     return {"type": "constant", "value": float(val)}
 
@@ -1112,6 +1147,7 @@ def build_term_ui(
             index=connector_options.index(old_connector),
             key=f"{t_key}_connector",
             help="The first term has no previous term, so only a positive or negative initial sign is meaningful.",
+            **_keep_objective_term_open_kwargs(t_key),
         )
     else:
         connector_options = ["+", "-", "*", "/"]
@@ -1133,6 +1169,7 @@ def build_term_ui(
                 "Operation between the complete previous expression and this term. "
                 "Multiplication/division are allowed only when the resulting model remains linear."
             ),
+            **_keep_objective_term_open_kwargs(t_key),
         )
     n_factors = int(c2.number_input(
         f"Factors {t_idx+1}",
@@ -1142,6 +1179,7 @@ def build_term_ui(
         step=1,
         key=f"{t_key}_nfac",
         help="Number of factors connected by multiplication or division.",
+        **_keep_objective_term_open_kwargs(t_key),
     ))
     n_sums = int(c3.number_input(
         f"Summations {t_idx+1}",
@@ -1151,6 +1189,7 @@ def build_term_ui(
         step=1,
         key=f"{t_key}_nsums",
         help="Number of nested summations applied to the complete factor chain.",
+        **_keep_objective_term_open_kwargs(t_key),
     ))
 
     st.caption(
@@ -1177,6 +1216,7 @@ def build_term_ui(
                         "Choose how this factor is combined with the previous factor. "
                         "Division by a decision variable is not allowed because the model would no longer be linear."
                     ),
+                    **_keep_objective_term_open_kwargs(t_key),
                 )
                 factor_ops.append(op)
 
@@ -1225,6 +1265,7 @@ def build_term_ui(
                     "Index iterated by this summation. "
                     "Summation 1 is the outermost summation."
                 ),
+                **_keep_objective_term_open_kwargs(t_key),
             )
 
             default_lower = str(old_sum.get("lower", "1"))
@@ -1243,6 +1284,7 @@ def build_term_ui(
                     "Inclusive lower index position. Examples: `1`, `j+2`, `2*j+1`. "
                     "It may depend on a free or outer index."
                 ),
+                **_keep_objective_term_open_kwargs(t_key),
             ).strip()
 
             upper = c.text_input(
@@ -1252,6 +1294,7 @@ def build_term_ui(
                 help=(
                     f"Inclusive upper position. Use `N_{idx}` to traverse the complete `{idx}` index."
                 ),
+                **_keep_objective_term_open_kwargs(t_key),
             ).strip()
 
             if idx in used_sum_indices:
@@ -1292,6 +1335,9 @@ def _open_family(r: int):
 
 def _open_parameter(p: int):
     st.session_state["parameter_expander_abierto"] = p
+
+def _open_objective_term(t: int):
+    st.session_state["objective_term_expander_abierto"] = t
 
 # ============================================================
 # SIDEBAR
@@ -1670,7 +1716,15 @@ elif section == "Model Definition":
                     old_preview = "new term"
                 term_title = f"Objective term {t+1} — {old_preview}"
 
-                with st.expander(term_title, expanded=(t == 0)):
+                expanded = (
+                    st.session_state.get("objective_term_expander_abierto") == t
+                    or (
+                        st.session_state.get("objective_term_expander_abierto") is None
+                        and t == 0
+                    )
+                )
+
+                with st.expander(term_title, expanded=expanded):
                     term = build_term_ui(
                         f"obj_t{t}",
                         t,
