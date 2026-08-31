@@ -548,9 +548,31 @@ def _fac_latex(f: dict) -> str:
     n, idxs = f["name"], f["indices"]
     return n if not idxs else rf"{n}_{{{','.join(idxs)}}}"
 
-def term_latex(t: dict) -> str:
+def _factor_ops(t: dict) -> list[str]:
+    """Return operators between factors. Old models default to multiplication."""
     factors = t.get("factors", [])
-    body = r" \cdot ".join(_fac_latex(f) for f in factors) if factors else "0"
+    expected = max(0, len(factors) - 1)
+    ops = list(t.get("factor_ops", []))
+    if len(ops) < expected:
+        ops.extend(["*"] * (expected - len(ops)))
+    return ops[:expected]
+
+def _factors_latex(t: dict) -> str:
+    factors = t.get("factors", [])
+    if not factors:
+        return "0"
+
+    body = _fac_latex(factors[0])
+    for op, factor in zip(_factor_ops(t), factors[1:]):
+        rhs = _fac_latex(factor)
+        if op == "/":
+            body = rf"\frac{{{body}}}{{{rhs}}}"
+        else:
+            body = rf"{body} \cdot {rhs}"
+    return body
+
+def term_latex(t: dict) -> str:
+    body = _factors_latex(t)
     for s in reversed(_term_sums(t)):
         idx = s["index"]
         lower = s.get("lower", "1")
@@ -656,11 +678,48 @@ def validate_family(fam: dict, idx_names: list[str] | None = None) -> list[str]:
 
 def validate_linearity(spec: dict) -> list[str]:
     errs = []
+
     def chk(terms, ctx):
         for i, t in enumerate(terms, 1):
-            nv = sum(1 for f in t.get("factors", []) if f["type"] == "object" and f.get("kind") == "variable")
+            factors = t.get("factors", [])
+            ops = _factor_ops(t)
+
+            # A linear term can contain at most one decision-variable factor.
+            nv = sum(
+                1 for f in factors
+                if f.get("type") == "object" and f.get("kind") == "variable"
+            )
             if nv > 1:
-                errs.append(f"{ctx} term {i}: {nv} variables are multiplied together → nonlinear expression")
+                errs.append(
+                    f"{ctx} term {i}: {nv} decision variables occur in the same factor chain "
+                    "→ nonlinear expression."
+                )
+
+            # Division by a decision variable is nonlinear.
+            for pos, (op, factor) in enumerate(zip(ops, factors[1:]), start=2):
+                if op != "/":
+                    continue
+
+                if factor.get("type") == "object" and factor.get("kind") == "variable":
+                    errs.append(
+                        f"{ctx} term {i}: factor {pos} is a decision variable in the denominator "
+                        "→ nonlinear expression."
+                    )
+
+                if factor.get("type") == "constant" and abs(float(factor.get("value", 0.0))) < 1e-12:
+                    errs.append(
+                        f"{ctx} term {i}: factor {pos} is zero and cannot be used as a denominator."
+                    )
+
+                if factor.get("type") == "object" and factor.get("kind") == "parameter":
+                    ps = spec.get("parameters", {}).get(factor.get("name"), {})
+                    vals = ps.get("values", {})
+                    if any(abs(float(v)) < 1e-12 for v in vals.values()):
+                        errs.append(
+                            f"{ctx} term {i}: denominator parameter `{factor.get('name')}` contains "
+                            "at least one zero value."
+                        )
+
     obj = spec.get("objective")
     if obj:
         chk(obj.get("terms", []), "Objective")
@@ -705,15 +764,27 @@ def _get_val(model, f: dict, env: dict):
     key = tuple(env[i] for i in idxs)
     return comp[key[0]] if len(key) == 1 else comp[key]
 
+def _eval_factor_chain(model, t: dict, env: dict):
+    factors = t.get("factors", [])
+    if not factors:
+        return 0
+
+    val = _get_val(model, factors[0], env)
+    for op, factor in zip(_factor_ops(t), factors[1:]):
+        rhs = _get_val(model, factor, env)
+        if op == "/":
+            val = val / rhs
+        else:
+            val = val * rhs
+    return val
+
 def _eval_term(model, t: dict, env: dict):
     sums = _term_sums(t)
     idx_specs = getattr(model, "_idx_specs")
 
     def recurse(pos, local_env):
         if pos == len(sums):
-            val = 1
-            for f in t.get("factors", []):
-                val = val * _get_val(model, f, local_env)
+            val = _eval_factor_chain(model, t, local_env)
             return (-val) if t.get("sign") == "-" else val
 
         sum_spec = sums[pos]
@@ -840,91 +911,231 @@ def _rand_controls(key_prefix: str) -> tuple[float, float, bool, int]:
     seed = int(c4.number_input("Seed", value=123, step=1, key=f"{key_prefix}_seed", help="Use the same seed to reproduce the same random values."))
     return lo, hi, integer, seed
 
-def build_factor_ui(t_key: str, f_idx: int, old_factor: dict | None, catalog: list[dict], label_map: dict, default_type="object") -> dict | None:
-    cfa, cfb, cfc = st.columns([1.5, 2.5, 2])
-    ftype = cfa.selectbox(
-        f"Factor type {f_idx+1}", ["object", "constant"],
-        index=0 if (old_factor or {}).get("type", default_type) == "object" else 1,
+def build_factor_ui(
+    t_key: str,
+    f_idx: int,
+    old_factor: dict | None,
+    catalog: list[dict],
+    label_map: dict,
+    default_type="object"
+) -> dict | None:
+    old_factor = old_factor or {}
+
+    ftype = st.selectbox(
+        f"Factor type {f_idx+1}",
+        ["object", "constant"],
+        index=0 if old_factor.get("type", default_type) == "object" else 1,
         format_func=lambda x: "Parameter / Variable" if x == "object" else "Constant",
         key=f"{t_key}_ftype_{f_idx}",
-        help="Choose whether this factor is a model object or a numeric constant."
+        help=(
+            "Choose a parameter/variable or a numeric constant. "
+            "Multiplication and division are selected between consecutive factors."
+        ),
     )
+
     if ftype == "object":
         labels = [o["label"] for o in catalog]
         if not labels:
             st.error("No parameters or variables are available.")
             return None
+
         default_lbl = labels[0]
-        if old_factor and old_factor.get("type") == "object" and old_factor.get("label") in labels:
+        if old_factor.get("type") == "object" and old_factor.get("label") in labels:
             default_lbl = old_factor["label"]
-        chosen = cfb.selectbox(
-            f"Object {f_idx+1}", labels, index=labels.index(default_lbl), key=f"{t_key}_fobj_{f_idx}",
-            help="Select the parameter or decision variable used in this product."
+
+        chosen = st.selectbox(
+            f"Object {f_idx+1}",
+            labels,
+            index=labels.index(default_lbl),
+            key=f"{t_key}_fobj_{f_idx}",
+            help="Select the parameter or decision variable used in this factor.",
         )
         item = label_map[chosen]
-        cfc.write(f"Indices: {', '.join(item['indices']) or 'none'}")
-        return {"type": "object", "kind": item["kind"], "name": item["name"], "indices": item["indices"], "label": item["label"]}
-    else:
-        dval = float((old_factor or {}).get("value", 0.0)) if (old_factor or {}).get("type") == "constant" else 0.0
-        val = cfb.number_input(
-            f"Constant {f_idx+1}", value=dval, key=f"{t_key}_fconst_{f_idx}",
-            help="Enter the numeric coefficient or constant used in this product."
-        )
-        return {"type": "constant", "value": float(val)}
+        st.caption(f"Indices: {', '.join(item['indices']) or 'none'}")
+        return {
+            "type": "object",
+            "kind": item["kind"],
+            "name": item["name"],
+            "indices": item["indices"],
+            "label": item["label"],
+        }
 
-def build_term_ui(t_key: str, t_idx: int, old_term: dict | None, catalog: list[dict], label_map: dict, idx_names: list[str], default_const_type="object") -> dict:
+    dval = (
+        float(old_factor.get("value", 0.0))
+        if old_factor.get("type") == "constant"
+        else 0.0
+    )
+    val = st.number_input(
+        f"Constant {f_idx+1}",
+        value=dval,
+        key=f"{t_key}_fconst_{f_idx}",
+        help="Enter the numeric value used in this factor.",
+    )
+    return {"type": "constant", "value": float(val)}
+
+
+def build_term_ui(
+    t_key: str,
+    t_idx: int,
+    old_term: dict | None,
+    catalog: list[dict],
+    label_map: dict,
+    idx_names: list[str],
+    default_const_type="object"
+) -> dict:
     old = old_term or {}
     old_sums = _term_sums(old)
+    old_ops = _factor_ops(old)
 
     c1, c2, c3 = st.columns([1, 2, 2])
     sign = c1.selectbox(
-        f"Sign {t_idx+1}", ["+", "-"], index=0 if old.get("sign", "+") == "+" else 1, key=f"{t_key}_sign",
-        help="Select whether this term is added to or subtracted from the expression."
+        f"Sign {t_idx+1}",
+        ["+", "-"],
+        index=0 if old.get("sign", "+") == "+" else 1,
+        key=f"{t_key}_sign",
+        help=(
+            "This controls addition/subtraction between complete terms. "
+            "Use the factor operators below for multiplication or division."
+        ),
     )
     n_factors = int(c2.number_input(
-        f"Factors {t_idx+1}", min_value=1, max_value=4, value=max(1, len(old.get("factors", [])) or 2), step=1, key=f"{t_key}_nfac",
-        help="Number of factors multiplied inside this term."
+        f"Factors {t_idx+1}",
+        min_value=1,
+        max_value=6,
+        value=max(1, len(old.get("factors", [])) or 2),
+        step=1,
+        key=f"{t_key}_nfac",
+        help="Number of factors connected by multiplication or division.",
     ))
     n_sums = int(c3.number_input(
-        f"Summations {t_idx+1}", min_value=0, max_value=max(0, len(idx_names)), value=min(len(old_sums), len(idx_names)), step=1, key=f"{t_key}_nsums",
-        help="Number of nested summations for this term. Each summation can have its own lower and upper bound."
+        f"Summations {t_idx+1}",
+        min_value=0,
+        max_value=max(0, len(idx_names)),
+        value=min(len(old_sums), len(idx_names)),
+        step=1,
+        key=f"{t_key}_nsums",
+        help="Number of nested summations applied to the complete factor chain.",
     ))
+
+    st.caption(
+        "Use the term sign for + / − between terms. "
+        "Use × / ÷ below to connect factors inside this term."
+    )
 
     old_factors = old.get("factors", [])
     factors = []
+    factor_ops = []
+
+    st.markdown("##### Factors and operators")
     for fi in range(n_factors):
-        f = build_factor_ui(f"{t_key}_f{fi}", fi, old_factors[fi] if fi < len(old_factors) else None, catalog, label_map, default_const_type)
-        if f:
-            factors.append(f)
+        with st.container(border=True):
+            if fi > 0:
+                default_op = old_ops[fi - 1] if fi - 1 < len(old_ops) else "*"
+                op = st.selectbox(
+                    f"Operator before factor {fi+1}",
+                    ["*", "/"],
+                    index=0 if default_op != "/" else 1,
+                    format_func=lambda x: "×  Multiply" if x == "*" else "÷  Divide",
+                    key=f"{t_key}_fop_{fi-1}",
+                    help=(
+                        "Choose how this factor is combined with the previous factor. "
+                        "Division by a decision variable is not allowed because the model would no longer be linear."
+                    ),
+                )
+                factor_ops.append(op)
+
+            f = build_factor_ui(
+                f"{t_key}_f{fi}",
+                fi,
+                old_factors[fi] if fi < len(old_factors) else None,
+                catalog,
+                label_map,
+                default_const_type,
+            )
+            if f:
+                factors.append(f)
 
     sums = []
     if n_sums:
         st.markdown("##### Summation bounds")
-        st.caption("Bounds use index positions. Examples: `1`, `j+2`, `2*j+1`, `N_i-1`. `N_i` means the size of index `i`.")
+        st.info(
+            "**How indices work**\n\n"
+            "- `i`, `j`, etc. are index positions used by parameters and variables.\n"
+            "- To sum over the complete index `i`, use **Lower = `1`** and **Upper = `N_i`**.\n"
+            "- `N_i` means the total size of index `i`.\n"
+            "- Do **not** use `i` as the upper bound of the same `i` summation; that would be circular.\n"
+            "- A bound may depend on another free or outer index, e.g. `i = j+2, ..., N_i`.\n"
+            "- Nested summations are evaluated from top to bottom: Summation 1 is outer, Summation 2 is inner."
+        )
 
     used_sum_indices = []
     for si in range(n_sums):
         old_sum = old_sums[si] if si < len(old_sums) else {}
-        default_idx = old_sum.get("index") if old_sum.get("index") in idx_names else (idx_names[si] if si < len(idx_names) else idx_names[0])
-        a, b, c = st.columns([1.2, 1.8, 1.8])
-        idx = a.selectbox(
-            f"Sum index {si+1}", idx_names, index=idx_names.index(default_idx), key=f"{t_key}_sumidx_{si}",
-            help="Index iterated by this summation. Nested summations are evaluated from top to bottom."
+        default_idx = (
+            old_sum.get("index")
+            if old_sum.get("index") in idx_names
+            else (idx_names[si] if si < len(idx_names) else idx_names[0])
         )
-        lower = b.text_input(
-            f"Lower bound {si+1}", value=str(old_sum.get("lower", "1")), key=f"{t_key}_sumlo_{si}",
-            help="Inclusive lower position. It may depend on a free or outer index, e.g. `j+2`."
-        ).strip()
-        upper = c.text_input(
-            f"Upper bound {si+1}", value=str(old_sum.get("upper", f"N_{idx}")), key=f"{t_key}_sumhi_{si}",
-            help=f"Inclusive upper position. Use `N_{idx}` for the full size of index `{idx}`."
-        ).strip()
-        if idx in used_sum_indices:
-            st.error(f"Index `{idx}` is already used by another summation in this term.")
-        used_sum_indices.append(idx)
-        sums.append({"index": idx, "lower": lower or "1", "upper": upper or f"N_{idx}"})
 
-    term = {"sign": sign, "factors": factors, "sums": sums}
+        with st.container(border=True):
+            st.markdown(f"**Summation {si+1}**")
+            a, b, c = st.columns([1.2, 1.8, 1.8])
+            idx = a.selectbox(
+                f"Sum index {si+1}",
+                idx_names,
+                index=idx_names.index(default_idx),
+                key=f"{t_key}_sumidx_{si}",
+                help=(
+                    "Index iterated by this summation. "
+                    "Summation 1 is the outermost summation."
+                ),
+            )
+
+            default_lower = str(old_sum.get("lower", "1"))
+            default_upper = str(old_sum.get("upper", f"N_{idx}"))
+
+            # If an older UI stored the own index as the upper bound,
+            # show the mathematically meaningful full-range default instead.
+            if default_upper == idx:
+                default_upper = f"N_{idx}"
+
+            lower = b.text_input(
+                f"Lower bound {si+1}",
+                value=default_lower,
+                key=f"{t_key}_sumlo_{si}",
+                help=(
+                    "Inclusive lower index position. Examples: `1`, `j+2`, `2*j+1`. "
+                    "It may depend on a free or outer index."
+                ),
+            ).strip()
+
+            upper = c.text_input(
+                f"Upper bound {si+1}",
+                value=default_upper,
+                key=f"{t_key}_sumhi_{si}",
+                help=(
+                    f"Inclusive upper position. Use `N_{idx}` to traverse the complete `{idx}` index."
+                ),
+            ).strip()
+
+            if idx in used_sum_indices:
+                st.error(f"Index `{idx}` is already used by another summation in this term.")
+            used_sum_indices.append(idx)
+
+            sums.append({
+                "index": idx,
+                "lower": lower or "1",
+                "upper": upper or f"N_{idx}",
+            })
+
+    term = {
+        "sign": sign,
+        "factors": factors,
+        "factor_ops": factor_ops,
+        "sums": sums,
+    }
+
+    st.markdown("##### Term preview")
     st.latex(term_latex(term))
     return term
 
@@ -1294,18 +1505,35 @@ elif section == "Model Definition":
             section_box(
                 "Objective Function",
                 "Combine parameters, variables, constants, and summations to define the single objective.",
-                "Every free index in the objective must be eliminated by a summation. Dynamic summation bounds may use expressions such as j+2 or 2*j+1."
+                "Every free index in the objective must be eliminated by a summation. Use N_i for the full upper bound of index i; dynamic bounds may depend on another free or outer index, such as j+2."
             )
             cur_obj = spec.get("objective") or {}
             sense_opts = ["minimize", "maximize"]
             sense = st.radio("Objective sense:", sense_opts, index=sense_opts.index(cur_obj.get("sense", "minimize")), horizontal=True, key="obj_sense", help="Choose whether the objective function is minimized or maximized.")
             old_terms = cur_obj.get("terms", [])
             n_terms = int(st.number_input("Objective terms", 1, 20, max(1, len(old_terms) or 1), step=1, key="n_obj_terms", help="Number of additive/subtractive terms in the objective function."))
+            st.info(
+                "**Expression structure**\n\n"
+                "- Create separate **Objective terms** for addition/subtraction.\n"
+                "- Inside each term, connect factors using **× Multiply** or **÷ Divide**.\n"
+                "- Apply summations to the complete factor chain.\n"
+                "- Example: `- 8 × x[i,j]` with summations over `i` and `j` represents "
+                r"$-8\sum_i\sum_j x_{ij}$."
+            )
+
             obj_terms = []
             for t in range(n_terms):
-                st.markdown(f"#### Objective term {t+1}")
-                term = build_term_ui(f"obj_t{t}", t, old_terms[t] if t < len(old_terms) else None, catalog, label_map, idx_names)
-                obj_terms.append(term)
+                with st.container(border=True):
+                    st.markdown(f"### Objective term {t+1}")
+                    term = build_term_ui(
+                        f"obj_t{t}",
+                        t,
+                        old_terms[t] if t < len(old_terms) else None,
+                        catalog,
+                        label_map,
+                        idx_names,
+                    )
+                    obj_terms.append(term)
 
             errs = validate_obj(obj_terms, idx_names)
             for e in errs: st.error(e)
@@ -1317,7 +1545,7 @@ elif section == "Model Definition":
             section_box(
                 "Constraint Families",
                 "Define indexed constraint families by building the left-hand side, operator, and right-hand side.",
-                "Use For all for the free indices of the family. Inside each term, summation bounds can depend on those free indices, for example sum from i=j+2 to N_i."
+                "Use For all for the free indices of the family. For a complete sum over i use 1 to N_i. A dynamic bound may depend on another free or outer index, for example i=j+2,...,N_i."
             )
             old_fams = spec.get("constraints", [])
             n_fams = int(st.number_input("Constraint families", 0, 30, len(old_fams), step=1, key="n_fams", help="Number of algebraic constraint families in the model."))
@@ -1357,13 +1585,44 @@ elif section == "Model Definition":
 
                     with colL:
                         st.markdown(f"#### LHS of {fname}")
-                        n_lhs = int(st.number_input(f"LHS terms for {fname}", 0, 10, len(old_lhs), step=1, key=f"nlhs_{r}", on_change=_open_family, args=(r,)))
-                        lhs_terms = [build_term_ui(f"lhs_{r}_{t}", t, old_lhs[t] if t < len(old_lhs) else None, catalog, label_map, idx_names) for t in range(n_lhs)]
+                        n_lhs = int(st.number_input(
+                            f"LHS terms for {fname}", 0, 10, len(old_lhs),
+                            step=1, key=f"nlhs_{r}",
+                            on_change=_open_family, args=(r,),
+                            help="Each LHS term is placed in its own box."
+                        ))
+                        lhs_terms = []
+                        for t in range(n_lhs):
+                            with st.container(border=True):
+                                st.markdown(f"**LHS term {t+1}**")
+                                lhs_terms.append(
+                                    build_term_ui(
+                                        f"lhs_{r}_{t}", t,
+                                        old_lhs[t] if t < len(old_lhs) else None,
+                                        catalog, label_map, idx_names
+                                    )
+                                )
 
                     with colR:
                         st.markdown(f"#### RHS of {fname}")
-                        n_rhs = int(st.number_input(f"RHS terms for {fname}", 0, 10, len(old_rhs), step=1, key=f"nrhs_{r}", on_change=_open_family, args=(r,)))
-                        rhs_terms = [build_term_ui(f"rhs_{r}_{t}", t, old_rhs[t] if t < len(old_rhs) else None, catalog, label_map, idx_names, default_const_type="constant") for t in range(n_rhs)]
+                        n_rhs = int(st.number_input(
+                            f"RHS terms for {fname}", 0, 10, len(old_rhs),
+                            step=1, key=f"nrhs_{r}",
+                            on_change=_open_family, args=(r,),
+                            help="Each RHS term is placed in its own box."
+                        ))
+                        rhs_terms = []
+                        for t in range(n_rhs):
+                            with st.container(border=True):
+                                st.markdown(f"**RHS term {t+1}**")
+                                rhs_terms.append(
+                                    build_term_ui(
+                                        f"rhs_{r}_{t}", t,
+                                        old_rhs[t] if t < len(old_rhs) else None,
+                                        catalog, label_map, idx_names,
+                                        default_const_type="constant"
+                                    )
+                                )
 
                     family_record = {"name": fname, "forall": forall, "sense": sense_f, "lhs_terms": lhs_terms, "rhs_terms": rhs_terms}
                     st.markdown(f"### Preview — {fname}")
