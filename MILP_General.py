@@ -11,7 +11,7 @@ import pyomo.environ as pyo
 # ============================================================
 # PAGE CONFIG
 # ============================================================
-st.set_page_config(page_title="Algebraic Model Builder", layout="wide")
+st.set_page_config(page_title="MILP General", layout="wide")
 
 # ============================================================
 # STYLES + WATERMARK
@@ -826,9 +826,7 @@ def validate_linearity(spec: dict) -> list[str]:
 _DOMAINS = {"Binary": pyo.Binary, "NonNegativeReals": pyo.NonNegativeReals, "NonNegativeIntegers": pyo.NonNegativeIntegers}
 
 SOLVER_OPTIONS = {
-    "HiGHS (appsi_highs)": "appsi_highs",
-    "GLPK": "glpk",
-    "CBC": "cbc",
+    "HiGHS": "appsi_highs",
 }
 
 
@@ -1370,8 +1368,8 @@ st.sidebar.markdown(_sb_kpi("Defined constraints", n_con), unsafe_allow_html=Tru
 # ============================================================
 # MAIN
 # ============================================================
-st.title("Linear Model Solver")
-st.caption("Application for building and solving single-objective linear models.")
+st.title("MILP General")
+st.caption("Application for building and solving single-objective mixed-integer linear programming models.")
 
 # ============================================================
 # SECTION 1: DATA INPUT
@@ -1893,7 +1891,7 @@ elif section == "Model Outputs":
             "Solver",
             list(SOLVER_OPTIONS.keys()),
             index=0,
-            help="HiGHS is the recommended option for continuous, integer, and binary linear models."
+            help="HiGHS is used to solve continuous, integer, and binary linear models."
         )
 
         if st.button("Solve model", type="primary"):
