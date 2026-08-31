@@ -557,6 +557,20 @@ def _factor_ops(t: dict) -> list[str]:
         ops.extend(["*"] * (expected - len(ops)))
     return ops[:expected]
 
+def _term_connector(t: dict, position: int) -> str:
+    """
+    Connector between complete terms.
+    Backward compatibility:
+      - old `sign` becomes + or -
+      - first term only supports unary +/-
+    """
+    if position == 0:
+        return "-" if t.get("connector", t.get("sign", "+")) == "-" else "+"
+    op = t.get("connector")
+    if op in {"+", "-", "*", "/"}:
+        return op
+    return "-" if t.get("sign", "+") == "-" else "+"
+
 def _factors_latex(t: dict) -> str:
     factors = t.get("factors", [])
     if not factors:
@@ -571,20 +585,48 @@ def _factors_latex(t: dict) -> str:
             body = rf"{body} \cdot {rhs}"
     return body
 
-def term_latex(t: dict) -> str:
+def term_body_latex(t: dict) -> str:
+    """LaTeX body for one complete term, without the connector to other terms."""
     body = _factors_latex(t)
     for s in reversed(_term_sums(t)):
         idx = s["index"]
         lower = s.get("lower", "1")
         upper = s.get("upper", f"N_{idx}")
         body = rf"\sum_{{{idx}={lower}}}^{{{upper}}}\left({body}\right)"
-    return f"- {body}" if t.get("sign") == "-" else f"+ {body}"
+    return body
+
+def term_latex(t: dict) -> str:
+    """
+    Backward-compatible standalone term preview.
+    Uses connector/sign as a unary sign only when it is + or -.
+    """
+    body = term_body_latex(t)
+    op = t.get("connector", t.get("sign", "+"))
+    return f"- {body}" if op == "-" else f"+ {body}"
 
 def expr_latex(terms: list[dict]) -> str:
     if not terms:
         return "0"
-    out = " ".join(term_latex(t) for t in terms).strip()
-    return out[2:] if out.startswith("+ ") else out
+
+    out = ""
+    for pos, t in enumerate(terms):
+        body = term_body_latex(t)
+        op = _term_connector(t, pos)
+
+        if pos == 0:
+            out = rf"- {body}" if op == "-" else body
+            continue
+
+        if op == "+":
+            out = rf"{out} + {body}"
+        elif op == "-":
+            out = rf"{out} - {body}"
+        elif op == "*":
+            out = rf"\left({out}\right)\cdot\left({body}\right)"
+        elif op == "/":
+            out = rf"\frac{{\left({out}\right)}}{{\left({body}\right)}}"
+
+    return out
 
 def family_latex(fam: dict) -> str:
     sense_map = {"<=": r"\leq", ">=": r"\geq", "=": "="}
@@ -676,15 +718,24 @@ def validate_family(fam: dict, idx_names: list[str] | None = None) -> list[str]:
         errs.append(f"Both sides are constant, but forall indices were defined: {forall}")
     return errs
 
+def _term_has_variable(t: dict) -> bool:
+    return any(
+        f.get("type") == "object" and f.get("kind") == "variable"
+        for f in t.get("factors", [])
+    )
+
+def _term_is_parameter_only(t: dict) -> bool:
+    """True when the complete term contains no decision variable."""
+    return not _term_has_variable(t)
+
 def validate_linearity(spec: dict) -> list[str]:
     errs = []
 
-    def chk(terms, ctx):
+    def chk_internal(terms, ctx):
         for i, t in enumerate(terms, 1):
             factors = t.get("factors", [])
             ops = _factor_ops(t)
 
-            # A linear term can contain at most one decision-variable factor.
             nv = sum(
                 1 for f in factors
                 if f.get("type") == "object" and f.get("kind") == "variable"
@@ -695,7 +746,6 @@ def validate_linearity(spec: dict) -> list[str]:
                     "→ nonlinear expression."
                 )
 
-            # Division by a decision variable is nonlinear.
             for pos, (op, factor) in enumerate(zip(ops, factors[1:]), start=2):
                 if op != "/":
                     continue
@@ -719,6 +769,45 @@ def validate_linearity(spec: dict) -> list[str]:
                             f"{ctx} term {i}: denominator parameter `{factor.get('name')}` contains "
                             "at least one zero value."
                         )
+
+    def chk_connectors(terms, ctx):
+        """
+        Term-level × or ÷ is allowed only when it preserves linearity:
+        - multiplying a variable-containing accumulated expression by a parameter-only term is valid;
+        - multiplying two variable-containing expressions is nonlinear;
+        - division by a variable-containing term is nonlinear.
+        """
+        if not terms:
+            return
+
+        acc_has_var = _term_has_variable(terms[0])
+
+        for pos, t in enumerate(terms[1:], start=1):
+            op = _term_connector(t, pos)
+            rhs_has_var = _term_has_variable(t)
+
+            if op == "*":
+                if acc_has_var and rhs_has_var:
+                    errs.append(
+                        f"{ctx} term {pos+1}: multiplying two expressions that contain decision "
+                        "variables is nonlinear."
+                    )
+                acc_has_var = acc_has_var or rhs_has_var
+
+            elif op == "/":
+                if rhs_has_var:
+                    errs.append(
+                        f"{ctx} term {pos+1}: division by an expression containing a decision "
+                        "variable is nonlinear."
+                    )
+                # If denominator is parameter-only, variable status of accumulator is unchanged.
+
+            else:
+                acc_has_var = acc_has_var or rhs_has_var
+
+    def chk(terms, ctx):
+        chk_internal(terms, ctx)
+        chk_connectors(terms, ctx)
 
     obj = spec.get("objective")
     if obj:
@@ -778,14 +867,14 @@ def _eval_factor_chain(model, t: dict, env: dict):
             val = val * rhs
     return val
 
-def _eval_term(model, t: dict, env: dict):
+def _eval_term_body(model, t: dict, env: dict):
+    """Evaluate one complete term without applying its connector."""
     sums = _term_sums(t)
     idx_specs = getattr(model, "_idx_specs")
 
     def recurse(pos, local_env):
         if pos == len(sums):
-            val = _eval_factor_chain(model, t, local_env)
-            return (-val) if t.get("sign") == "-" else val
+            return _eval_factor_chain(model, t, local_env)
 
         sum_spec = sums[pos]
         idx = sum_spec["index"]
@@ -795,7 +884,30 @@ def _eval_term(model, t: dict, env: dict):
     return recurse(0, dict(env))
 
 def _build_expr(model, terms: list[dict], env: dict):
-    return sum(_eval_term(model, t, env) for t in terms) if terms else 0
+    """
+    Build the full expression using connectors between complete terms.
+    Evaluation is left-associative for × and ÷ at the term level.
+    """
+    if not terms:
+        return 0
+
+    first = _eval_term_body(model, terms[0], env)
+    acc = -first if _term_connector(terms[0], 0) == "-" else first
+
+    for pos, t in enumerate(terms[1:], start=1):
+        rhs = _eval_term_body(model, t, env)
+        op = _term_connector(t, pos)
+
+        if op == "+":
+            acc = acc + rhs
+        elif op == "-":
+            acc = acc - rhs
+        elif op == "*":
+            acc = acc * rhs
+        elif op == "/":
+            acc = acc / rhs
+
+    return acc
 
 def build_pyomo_model(spec: dict):
     m = pyo.ConcreteModel()
@@ -988,16 +1100,40 @@ def build_term_ui(
     old_ops = _factor_ops(old)
 
     c1, c2, c3 = st.columns([1, 2, 2])
-    sign = c1.selectbox(
-        f"Sign {t_idx+1}",
-        ["+", "-"],
-        index=0 if old.get("sign", "+") == "+" else 1,
-        key=f"{t_key}_sign",
-        help=(
-            "This controls addition/subtraction between complete terms. "
-            "Use the factor operators below for multiplication or division."
-        ),
-    )
+
+    if t_idx == 0:
+        connector_options = ["+", "-"]
+        old_connector = old.get("connector", old.get("sign", "+"))
+        if old_connector not in connector_options:
+            old_connector = "+"
+        connector = c1.selectbox(
+            "Initial sign",
+            connector_options,
+            index=connector_options.index(old_connector),
+            key=f"{t_key}_connector",
+            help="The first term has no previous term, so only a positive or negative initial sign is meaningful.",
+        )
+    else:
+        connector_options = ["+", "-", "*", "/"]
+        old_connector = old.get("connector", old.get("sign", "+"))
+        if old_connector not in connector_options:
+            old_connector = "+"
+        connector = c1.selectbox(
+            f"Connector {t_idx+1}",
+            connector_options,
+            index=connector_options.index(old_connector),
+            format_func=lambda x: {
+                "+": "+  Add",
+                "-": "−  Subtract",
+                "*": "×  Multiply",
+                "/": "÷  Divide",
+            }[x],
+            key=f"{t_key}_connector",
+            help=(
+                "Operation between the complete previous expression and this term. "
+                "Multiplication/division are allowed only when the resulting model remains linear."
+            ),
+        )
     n_factors = int(c2.number_input(
         f"Factors {t_idx+1}",
         min_value=1,
@@ -1018,8 +1154,8 @@ def build_term_ui(
     ))
 
     st.caption(
-        "Use the term sign for + / − between terms. "
-        "Use × / ÷ below to connect factors inside this term."
+        "The connector above operates between complete terms. "
+        "The operators below operate between factors inside this term."
     )
 
     old_factors = old.get("factors", [])
@@ -1129,7 +1265,9 @@ def build_term_ui(
             })
 
     term = {
-        "sign": sign,
+        "connector": connector,
+        # Keep sign for backward compatibility with older saved specifications.
+        "sign": connector if connector in {"+", "-"} else "+",
         "factors": factors,
         "factor_ops": factor_ops,
         "sums": sums,
@@ -1511,11 +1649,11 @@ elif section == "Model Definition":
             sense_opts = ["minimize", "maximize"]
             sense = st.radio("Objective sense:", sense_opts, index=sense_opts.index(cur_obj.get("sense", "minimize")), horizontal=True, key="obj_sense", help="Choose whether the objective function is minimized or maximized.")
             old_terms = cur_obj.get("terms", [])
-            n_terms = int(st.number_input("Objective terms", 1, 20, max(1, len(old_terms) or 1), step=1, key="n_obj_terms", help="Number of additive/subtractive terms in the objective function. Each term is shown in a collapsible panel."))
+            n_terms = int(st.number_input("Objective terms", 1, 20, max(1, len(old_terms) or 1), step=1, key="n_obj_terms", help="Number of expression terms in the objective function. Terms can be connected by +, −, ×, or ÷. Each term is shown in a collapsible panel."))
             st.info(
                 "**Expression structure**\n\n"
-                "- Create separate **Objective terms** for addition/subtraction.\n"
-                "- Inside each term, connect factors using **× Multiply** or **÷ Divide**.\n"
+                "- Create separate **Objective terms** and connect them with **+**, **−**, **×**, or **÷**.\n"
+                "- Inside each term, factors can also be connected using **× Multiply** or **÷ Divide**.\n"
                 "- Apply summations to the complete factor chain.\n"
                 "- Example: `- 8 × x[i,j]` with summations over `i` and `j` represents "
                 r"$-8\sum_i\sum_j x_{ij}$."
@@ -1524,7 +1662,12 @@ elif section == "Model Definition":
             obj_terms = []
             for t in range(n_terms):
                 old_term = old_terms[t] if t < len(old_terms) else None
-                old_preview = term_latex(old_term) if old_term else "new term"
+                if old_term:
+                    preview_connector = _term_connector(old_term, t)
+                    preview_symbol = {"*": "×", "/": "÷"}.get(preview_connector, preview_connector)
+                    old_preview = f"{preview_symbol} {term_body_latex(old_term)}" if t > 0 else term_latex(old_term)
+                else:
+                    old_preview = "new term"
                 term_title = f"Objective term {t+1} — {old_preview}"
 
                 with st.expander(term_title, expanded=(t == 0)):
