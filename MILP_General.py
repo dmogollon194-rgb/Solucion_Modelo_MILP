@@ -200,141 +200,187 @@ def template_df_for_parameter(idx_names: list[str], idx_specs: dict, current_val
     return vals_to_df(idx_names, combos(idx_names, idx_specs), current_values)
 
 
-def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8-sig")
+def dataframe_to_csv_bytes(df: pd.DataFrame, header: bool = True) -> bytes:
+    return df.to_csv(index=False, header=header).encode("utf-8-sig")
 
 
-def dataframe_to_xlsx_bytes(df: pd.DataFrame) -> bytes | None:
+def dataframe_to_xlsx_bytes(df: pd.DataFrame, header: bool = True) -> bytes | None:
     """Create XLSX only when xlsxwriter is installed; otherwise return None without breaking the app."""
     buffer = io.BytesIO()
     try:
         with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False, sheet_name="parameter")
+            df.to_excel(writer, index=False, header=header, sheet_name="parameter")
         return buffer.getvalue()
     except Exception:
         return None
 
 
+def parameter_values_only_df(idx_names: list[str], idx_specs: dict, current_values: dict) -> pd.DataFrame:
+    """
+    Build a headerless values-only template.
+
+    The upload format intentionally contains no row labels, column headers,
+    index names, or other text. Values are assigned to parameter components
+    in the same order used by `combos(...)`.
+    """
+    if not idx_names:
+        values = [scalar_get(current_values, 0.0)]
+    else:
+        values = [float(current_values.get(str(c), 0.0)) for c in combos(idx_names, idx_specs)]
+    return pd.DataFrame(values)
+
+
 def read_parameter_upload(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
+    """
+    Read a headerless numeric CSV/Excel file.
+
+    CSV supports comma, semicolon, or tab separators. A parameter may be
+    supplied horizontally or vertically; validation later flattens values
+    from left to right and then top to bottom.
+    """
     name = uploaded_file.name.lower()
     try:
         if name.endswith(".csv"):
-            return pd.read_csv(uploaded_file), None
+            raw = uploaded_file.getvalue()
+            if not raw:
+                return None, "The file is empty."
+
+            # UTF-8 with BOM is common when exporting from Excel.
+            try:
+                content = raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                content = raw.decode("latin-1")
+
+            if not content.strip():
+                return None, "The file is empty."
+
+            # Detect the most common practical separators explicitly.
+            # This avoids pandas interpreting an entire semicolon row as a header.
+            sample = content[:4096]
+            counts = {sep: sample.count(sep) for sep in (";", ",", "\\t")}
+            sep = max(counts, key=counts.get) if max(counts.values()) > 0 else None
+
+            if sep is None:
+                return pd.read_csv(io.StringIO(content), header=None), None
+            return pd.read_csv(io.StringIO(content), sep=sep, header=None), None
+
         if name.endswith((".xlsx", ".xls")):
             try:
-                return pd.read_excel(uploaded_file), None
+                return pd.read_excel(uploaded_file, header=None), None
             except ImportError:
-                return None, "To load .xlsx files, install `openpyxl` or use the .csv template."
+                return None, "To load .xlsx files, install `openpyxl` or use CSV."
             except ModuleNotFoundError:
-                return None, "To load .xlsx files, install `openpyxl` or use the .csv template."
-        return None, "Unsupported format. Use .csv or .xlsx."
+                return None, "To load .xlsx files, install `openpyxl` or use CSV."
+
+        return None, "Unsupported format. Use .csv, .xlsx, or .xls."
     except Exception as exc:
         return None, f"The file could not be read: {exc}"
 
 
-def validate_and_convert_parameter_df(df: pd.DataFrame, idx_names: list[str], idx_specs: dict) -> tuple[dict | None, list[str]]:
-    errors: list[str] = []
+def validate_and_convert_parameter_df(
+    df: pd.DataFrame,
+    idx_names: list[str],
+    idx_specs: dict
+) -> tuple[dict | None, list[str]]:
+    """
+    Validate a values-only parameter file.
+
+    Rules:
+      * no headers or row labels;
+      * numeric values only;
+      * the exact expected number of values;
+      * values are read left-to-right, top-to-bottom.
+    """
     if df is None or df.empty:
         return None, ["The file is empty."]
 
-    df = df.copy()
-    df.columns = [str(c).strip() for c in df.columns]
+    work = df.copy()
 
-    if "value" not in df.columns:
-        errors.append("A column named exactly `value` is required.")
-        return None, errors
+    # Remove rows/columns that are completely empty, but do not silently
+    # ignore holes inside the actual data region.
+    work = work.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    if work.empty:
+        return None, ["The file is empty."]
 
-    try:
-        df["value"] = pd.to_numeric(df["value"], errors="raise")
-    except Exception:
-        errors.append("The `value` column must contain numeric values only.")
-        return None, errors
+    numeric = work.apply(pd.to_numeric, errors="coerce")
+
+    # Any non-empty cell that cannot be converted to a number indicates
+    # a header, row label, index name, or other invalid text.
+    invalid_mask = work.notna() & numeric.isna()
+    if invalid_mask.any().any():
+        bad = []
+        for r, c in zip(*np.where(invalid_mask.to_numpy())):
+            bad.append(str(work.iloc[r, c]))
+            if len(bad) >= 5:
+                break
+        shown = ", ".join(repr(x) for x in bad)
+        return None, [
+            "The upload must contain numeric values only — no column headers, "
+            "row labels, index names, or text."
+            + (f" Invalid cell(s): {shown}." if shown else "")
+        ]
+
+    if numeric.isna().any().any():
+        return None, [
+            "Empty cells are not allowed inside the data range. "
+            "Provide one numeric value for every parameter element."
+        ]
+
+    flat_values = numeric.to_numpy(dtype=float).ravel(order="C").tolist()
+    expected = total_elems(idx_names, idx_specs)
+
+    if len(flat_values) != expected:
+        signature = sig("parameter", idx_names)
+        return None, [
+            f"Expected exactly {expected} numeric value(s), but the file contains "
+            f"{len(flat_values)}. Do not include headers or row/column labels."
+        ]
 
     if not idx_names:
-        if len(df) < 1:
-            errors.append("A scalar parameter requires at least one row containing the `value` column.")
-            return None, errors
-        return {"__scalar__": float(df.iloc[0]["value"])}, []
-
-    if len(idx_names) == 1:
-        idx = idx_names[0]
-        index_col = "label" if "label" in df.columns else idx if idx in df.columns else None
-        if index_col is None:
-            errors.append(f"A `label` column or an index column is required: `{idx}`.")
-            return None, errors
-
-        work = df[[index_col, "value"]].copy()
-        work[index_col] = work[index_col].astype(str)
-
-        if work[index_col].duplicated().any():
-            repeated = work.loc[work[index_col].duplicated(), index_col].unique().tolist()
-            errors.append(f"Duplicated labels: {repeated}.")
-
-        expected = set(idx_specs[idx]["elements"])
-        observed = set(work[index_col].tolist())
-        missing = sorted(expected - observed)
-        observed_extra = sorted(observed - expected)
-        if missing:
-            errors.append(f"Missing labels for index `{idx}`: {missing}.")
-        if observed_extra:
-            errors.append(f"Labels not belonging to index `{idx}`: {observed_extra}.")
-        if errors:
-            return None, errors
-
-        values = {}
-        for _, row in work.iterrows():
-            values[str((str(row[index_col]),))] = float(row["value"])
-        return values, []
-
-    required_cols = idx_names + ["value"]
-    missing_cols = [c for c in required_cols if c not in df.columns]
-    if missing_cols:
-        errors.append(f"Missing required columns: {missing_cols}.")
-        return None, errors
-
-    work = df[required_cols].copy()
-    for idx in idx_names:
-        work[idx] = work[idx].astype(str)
-
-    if work.duplicated(subset=idx_names).any():
-        repeated_rows = work.loc[work.duplicated(subset=idx_names), idx_names].drop_duplicates().to_dict("records")
-        errors.append(f"Duplicated index combinations: {repeated_rows}.")
-
-    expected = set(combos(idx_names, idx_specs))
-    observed = set(tuple(row[idx] for idx in idx_names) for _, row in work.iterrows())
-    missing = sorted(expected - observed)
-    extra = sorted(observed - expected)
-    if missing:
-        errors.append(f"Missing index combinations: {missing}.")
-    if extra:
-        errors.append(f"Combinations not belonging to the defined indices: {extra}.")
-    if errors:
-        return None, errors
+        return {"__scalar__": float(flat_values[0])}, []
 
     values = {}
-    for _, row in work.iterrows():
-        key = tuple(str(row[idx]) for idx in idx_names)
-        values[str(key)] = float(row["value"])
+    for combo, value in zip(combos(idx_names, idx_specs), flat_values):
+        values[str(combo)] = float(value)
     return values, []
 
 
-def parameter_template_controls(row_pos: int, pname: str, idx_names: list[str], idx_specs: dict, current_values: dict):
-    df_template = template_df_for_parameter(idx_names, idx_specs, current_values)
+def parameter_template_controls(
+    row_pos: int,
+    pname: str,
+    idx_names: list[str],
+    idx_specs: dict,
+    current_values: dict
+):
+    # The downloadable file contains values only; the labelled preview shown
+    # in the app remains available so users can see the assignment order.
+    df_template_raw = parameter_values_only_df(idx_names, idx_specs, current_values)
+    df_preview = template_df_for_parameter(idx_names, idx_specs, current_values)
     file_base = f"template_{pname}"
     widget_suffix = _param_signature_key(pname, idx_names)
 
-    st.caption("Download the template, fill in only the `value` column, and upload it again. Do not rename the index columns.")
+    st.info(
+        "**File format instructions**\\n\\n"
+        "- Enter **numeric values only**.\\n"
+        "- **Do not include column headers, row titles, index labels, or index names.**\\n"
+        "- CSV files may use a **comma (`,`) or semicolon (`;`)** as separator.\\n"
+        "- Values may be arranged in **one row or one column**. They are read "
+        "**left to right, then top to bottom**.\\n"
+        f"- This parameter requires exactly **{total_elems(idx_names, idx_specs)} value(s)**."
+    )
+
     dl1, dl2 = st.columns(2)
     with dl1:
         st.download_button(
             "Download CSV template",
-            data=dataframe_to_csv_bytes(df_template),
+            data=dataframe_to_csv_bytes(df_template_raw, header=False),
             file_name=f"{file_base}.csv",
             mime="text/csv",
             key=f"tmpl_csv_{row_pos}_{widget_suffix}",
+            help="Downloads a values-only CSV file with no headers or row labels.",
         )
     with dl2:
-        xlsx_bytes = dataframe_to_xlsx_bytes(df_template)
+        xlsx_bytes = dataframe_to_xlsx_bytes(df_template_raw, header=False)
         if xlsx_bytes is not None:
             st.download_button(
                 "Download Excel template",
@@ -342,24 +388,34 @@ def parameter_template_controls(row_pos: int, pname: str, idx_names: list[str], 
                 file_name=f"{file_base}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key=f"tmpl_xlsx_{row_pos}_{widget_suffix}",
+                help="Downloads a values-only Excel file with no headers or row labels.",
             )
         else:
-            st.info("Install `xlsxwriter` to download .xlsx files. The CSV template can still be opened in Excel.")
+            st.info(
+                "Install `xlsxwriter` to download .xlsx files. "
+                "The CSV template can still be opened in Excel."
+            )
 
     uploaded = st.file_uploader(
         f"Upload values for {pname}",
         type=["csv", "xlsx", "xls"],
         key=f"upload_param_{row_pos}_{widget_suffix}",
+        help=(
+            "Upload numeric values only. Do not add headers, row labels, "
+            "index names, or other text."
+        ),
     )
 
     if uploaded is None:
-        st.dataframe(df_template, use_container_width=True, hide_index=True)
+        st.caption("Assignment order used by the model:")
+        st.dataframe(df_preview, use_container_width=True, hide_index=True)
         return current_values
 
     df_uploaded, read_error = read_parameter_upload(uploaded)
     if read_error:
         st.error(read_error)
-        st.dataframe(df_template, use_container_width=True, hide_index=True)
+        st.caption("Assignment order used by the model:")
+        st.dataframe(df_preview, use_container_width=True, hide_index=True)
         return current_values
 
     values, errors = validate_and_convert_parameter_df(df_uploaded, idx_names, idx_specs)
@@ -368,11 +424,20 @@ def parameter_template_controls(row_pos: int, pname: str, idx_names: list[str], 
             st.error(err)
         st.write("Uploaded file preview:")
         st.dataframe(df_uploaded, use_container_width=True, hide_index=True)
+        st.caption("Expected assignment order:")
+        st.dataframe(df_preview, use_container_width=True, hide_index=True)
         return current_values
 
-    st.success("Values loaded successfully.")
+    st.success(
+        f"Values loaded successfully: {total_elems(idx_names, idx_specs)} value(s) assigned to {sig(pname, idx_names)}."
+    )
     _set_param_values(row_pos, values)
-    st.dataframe(template_df_for_parameter(idx_names, idx_specs, values), use_container_width=True, hide_index=True)
+    st.caption("Parameter preview:")
+    st.dataframe(
+        template_df_for_parameter(idx_names, idx_specs, values),
+        use_container_width=True,
+        hide_index=True,
+    )
     return values
 
 # ============================================================
