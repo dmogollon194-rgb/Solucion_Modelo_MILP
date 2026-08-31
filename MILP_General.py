@@ -11,7 +11,7 @@ import pyomo.environ as pyo
 # ============================================================
 # PAGE CONFIG
 # ============================================================
-st.set_page_config(page_title="MILP General", layout="wide")
+st.set_page_config(page_title="General MILP", layout="wide")
 
 # ============================================================
 # STYLES + WATERMARK
@@ -60,18 +60,17 @@ hr{border-color:rgba(61,132,255,.18)}
 # SESSION STATE
 # ============================================================
 _EMPTY_SPEC = {
-    "sets": {}, "parameters": {}, "decisions": {},
+    "sets": {}, "parameters": {}, "variables": {},
     "objective": None, "constraints": [], "results": None,
 }
 
-APP_SCHEMA_VERSION = 4
-
 def _init():
-    if st.session_state.get("app_schema_version") != APP_SCHEMA_VERSION:
-        st.session_state.clear()
-        st.session_state["app_schema_version"] = APP_SCHEMA_VERSION
-    if "model_spec" not in st.session_state:
-        st.session_state["model_spec"] = _EMPTY_SPEC.copy()
+    current_spec = st.session_state.get("model_spec")
+    if not isinstance(current_spec, dict) or "sets" not in current_spec:
+        st.session_state["model_spec"] = {
+            "sets": {}, "parameters": {}, "variables": {},
+            "objective": None, "constraints": [], "results": None,
+        }
     if "constraint_family_expander_open" not in st.session_state:
         st.session_state["constraint_family_expander_open"] = None
     if "parameter_expander_open" not in st.session_state:
@@ -103,8 +102,8 @@ def total_elems(set_names: list[str], set_specs: dict) -> int:
         n *= set_specs[k]["size"]
     return n if set_names else 1
 
-def sig(name: str, sets_used: list[str]) -> str:
-    return f"{name}[{', '.join(sets_used)}]" if sets_used else name
+def sig(name: str, component_sets: list[str]) -> str:
+    return f"{name}[{', '.join(component_sets)}]" if component_sets else name
 
 # ============================================================
 # UTILITIES — VALUES SERIALIZATION
@@ -369,7 +368,7 @@ def parameter_template_controls(
     st.info(
         "**File format instructions**\\n\\n"
         "- Enter **numeric values only**.\\n"
-        "- **Do not include column headers, row titles, set-element labels, or set names.**\\n"
+        "- **Do not include column headers, row titles, set labels, or set names.**\\n"
         "- CSV files may use a **comma (`,`) or semicolon (`;`)** as separator.\\n"
         "- Values may be arranged in **one row or one column**. They are read "
         "**left to right, then top to bottom**.\\n"
@@ -456,7 +455,7 @@ def _term_sums(t: dict) -> list[dict]:
     """Return the new summation structure while remaining compatible with old models."""
     if "sums" in t:
         return t.get("sums", [])
-    return [{"set": set_name, "lower": "1", "upper": f"N_{set_name}"} for set_name in t.get("sum_over", [])]
+    return [{"index": idx, "lower": "1", "upper": f"N_{idx}"} for idx in t.get("sum_over", [])]
 
 def _expr_names(expr: str) -> set[str]:
     try:
@@ -472,7 +471,7 @@ def _safe_bound_eval(expr: str, numeric_env: dict[str, int], set_specs: dict) ->
         raise ValueError("A summation bound cannot be empty.")
 
     names = dict(numeric_env)
-    names.update({f"N_{set_name}": int(data["size"]) for set_name, data in set_specs.items()})
+    names.update({f"N_{idx}": int(data["size"]) for idx, data in set_specs.items()})
     tree = ast.parse(expr, mode="eval")
 
     def ev(node):
@@ -501,17 +500,17 @@ def _safe_bound_eval(expr: str, numeric_env: dict[str, int], set_specs: dict) ->
     value = ev(tree)
     rounded = round(float(value))
     if abs(float(value) - rounded) > 1e-9:
-        raise ValueError(f"Bound `{expr}` evaluates to {value}, but set positions must be integers.")
+        raise ValueError(f"Bound `{expr}` evaluates to {value}, but index positions must be integers.")
     return int(rounded)
 
-def _validate_bound_expression(expr: str, set_names: list[str], current_sum_set: str | None = None) -> list[str]:
+def _validate_bound_expression(expr: str, set_names: list[str], current_sum_index: str | None = None) -> list[str]:
     errors = []
     try:
         tree = ast.parse((expr or "").strip(), mode="eval")
     except Exception:
         return [f"Invalid bound expression `{expr}`."]
 
-    allowed_names = set(set_names) | {f"N_{set_name}" for set_name in set_names}
+    allowed_names = set(set_names) | {f"N_{idx}" for idx in set_names}
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             errors.append(f"Functions are not allowed in bound `{expr}`.")
@@ -519,29 +518,29 @@ def _validate_bound_expression(expr: str, set_names: list[str], current_sum_set:
             errors.append(f"Unknown symbol `{node.id}` in bound `{expr}`.")
         elif isinstance(node, (ast.Attribute, ast.Subscript, ast.List, ast.Dict, ast.Set, ast.Tuple)):
             errors.append(f"Unsupported syntax in bound `{expr}`.")
-    if current_sum_set and current_sum_set in _expr_names(expr):
-        errors.append(f"Bound `{expr}` cannot depend on its own summation set `{current_sum_set}`.")
+    if current_sum_index and current_sum_index in _expr_names(expr):
+        errors.append(f"Bound `{expr}` cannot depend on its own summation index `{current_sum_index}`.")
     return list(dict.fromkeys(errors))
 
-def _set_position(set_name: str, value: str, set_specs: dict) -> int:
-    elements = set_specs[set_name]["elements"]
+def _index_position(idx: str, value: str, set_specs: dict) -> int:
+    elements = set_specs[idx]["elements"]
     try:
         return elements.index(value) + 1
     except ValueError as exc:
-        raise ValueError(f"Value `{value}` does not belong to set `{set_name}`.") from exc
+        raise ValueError(f"Value `{value}` does not belong to index `{idx}`.") from exc
 
 def _bound_env(env: dict, set_specs: dict) -> dict[str, int]:
-    return {set_name: _set_position(set_name, value, set_specs) for set_name, value in env.items() if set_name in set_specs}
+    return {idx: _index_position(idx, value, set_specs) for idx, value in env.items() if idx in set_specs}
 
 def _sum_values(sum_spec: dict, env: dict, set_specs: dict) -> list[str]:
-    set_name = sum_spec["set"]
+    idx = sum_spec["index"]
     numeric_env = _bound_env(env, set_specs)
     lower = _safe_bound_eval(sum_spec.get("lower", "1"), numeric_env, set_specs)
-    upper = _safe_bound_eval(sum_spec.get("upper", f"N_{set_name}"), numeric_env, set_specs)
-    elements = set_specs[set_name]["elements"]
+    upper = _safe_bound_eval(sum_spec.get("upper", f"N_{idx}"), numeric_env, set_specs)
+    elements = set_specs[idx]["elements"]
     if lower > upper:
         return []
-    # Intersect the requested range with the valid positions of the set.
+    # Intersect the requested range with the valid positions of the index set.
     start = max(1, lower)
     end = min(len(elements), upper)
     if start > end:
@@ -552,8 +551,8 @@ def _fac_latex(f: dict) -> str:
     if f["type"] == "constant":
         v = float(f["value"])
         return str(int(v)) if v == int(v) else f"{v:.2f}"
-    n, sets_used = f["name"], f["sets"]
-    return n if not sets_used else rf"{n}_{{{','.join(sets_used)}}}"
+    n, component_sets = f["name"], f["sets"]
+    return n if not component_sets else rf"{n}_{{{','.join(component_sets)}}}"
 
 def _factor_ops(t: dict) -> list[str]:
     """Return operators between factors. Old models default to multiplication."""
@@ -596,10 +595,10 @@ def term_body_latex(t: dict) -> str:
     """LaTeX body for one complete term, without the connector to other terms."""
     body = _factors_latex(t)
     for s in reversed(_term_sums(t)):
-        set_name = s["set"]
+        idx = s["index"]
         lower = s.get("lower", "1")
-        upper = s.get("upper", f"N_{set_name}")
-        body = rf"\sum_{{{set_name}={lower}}}^{{{upper}}}\left({body}\right)"
+        upper = s.get("upper", f"N_{idx}")
+        body = rf"\sum_{{{idx}={lower}}}^{{{upper}}}\left({body}\right)"
     return body
 
 def term_latex(t: dict) -> str:
@@ -652,16 +651,16 @@ def term_free_sets(t: dict) -> list[str]:
             used.extend(f["sets"])
 
     sums = _term_sums(t)
-    sum_sets = [s["set"] for s in sums]
+    sum_indexes = [s["index"] for s in sums]
     for s in sums:
-        for expr in (s.get("lower", "1"), s.get("upper", f"N_{s['set']}")):
+        for expr in (s.get("lower", "1"), s.get("upper", f"N_{s['index']}")):
             used.extend(name for name in _expr_names(expr) if not name.startswith("N_"))
 
     seen, out = set(), []
     for x in used:
         if x not in seen:
             seen.add(x); out.append(x)
-    return [x for x in out if x not in sum_sets]
+    return [x for x in out if x not in sum_indexes]
 
 # ============================================================
 # UTILITIES — VALIDATION
@@ -671,21 +670,21 @@ def validate_term_sums(t: dict, set_names: list[str], context: str) -> list[str]
     sums = _term_sums(t)
     seen = set()
     for pos, s in enumerate(sums, 1):
-        set_name = s.get("set")
-        if set_name not in set_names:
-            errs.append(f"{context}: summation {pos} uses an undefined set `{set_name}`.")
+        idx = s.get("index")
+        if idx not in set_names:
+            errs.append(f"{context}: summation {pos} uses an undefined index `{idx}`.")
             continue
-        if set_name in seen:
-            errs.append(f"{context}: set `{set_name}` is used in more than one summation in the same term.")
-        seen.add(set_name)
-        errs.extend(f"{context}: {e}" for e in _validate_bound_expression(s.get("lower", "1"), set_names, set_name))
-        errs.extend(f"{context}: {e}" for e in _validate_bound_expression(s.get("upper", f"N_{set_name}"), set_names, set_name))
+        if idx in seen:
+            errs.append(f"{context}: index `{idx}` is used in more than one summation in the same term.")
+        seen.add(idx)
+        errs.extend(f"{context}: {e}" for e in _validate_bound_expression(s.get("lower", "1"), set_names, idx))
+        errs.extend(f"{context}: {e}" for e in _validate_bound_expression(s.get("upper", f"N_{idx}"), set_names, idx))
 
-        later_sets = {z.get("set") for z in sums[pos:] if z.get("set")}
-        dependencies = (_expr_names(s.get("lower", "1")) | _expr_names(s.get("upper", f"N_{set_name}"))) & set(set_names)
-        invalid_later_sets = sorted(dependencies & later_sets)
-        if invalid_later_sets:
-            errs.append(f"{context}: bounds for `{set_name}` cannot depend on inner/later summation sets {invalid_later_sets}.")
+        later_indexes = {z.get("index") for z in sums[pos:] if z.get("index")}
+        dependencies = (_expr_names(s.get("lower", "1")) | _expr_names(s.get("upper", f"N_{idx}"))) & set(set_names)
+        invalid_later = sorted(dependencies & later_indexes)
+        if invalid_later:
+            errs.append(f"{context}: bounds for `{idx}` cannot depend on inner/later summation indexes {invalid_later}.")
     return errs
 
 def validate_obj(terms: list[dict], set_names: list[str] | None = None) -> list[str]:
@@ -695,7 +694,7 @@ def validate_obj(terms: list[dict], set_names: list[str] | None = None) -> list[
         errs.extend(validate_term_sums(t, set_names, f"Objective term {i}"))
         free = term_free_sets(t)
         if free:
-            errs.append(f"Objective term {i}: free sets without a matching summation → {', '.join(free)}")
+            errs.append(f"Objective term {i}: free set dimensions without a matching summation → {', '.join(free)}")
     return errs
 
 def validate_family(fam: dict, set_names: list[str] | None = None) -> list[str]:
@@ -712,28 +711,28 @@ def validate_family(fam: dict, set_names: list[str] | None = None) -> list[str]:
     lc, rc = not lhs_free, not rhs_free
     if not lc and not rc:
         if sorted(lhs_free) != sorted(rhs_free):
-            errs.append(f"Free sets on LHS {lhs_free} ≠ free sets on RHS {rhs_free}")
+            errs.append(f"Free set dimensions on LHS {lhs_free} ≠ free set dimensions on RHS {rhs_free}")
         if sorted(lhs_free) != sorted(forall):
-            errs.append(f"Free sets {lhs_free} ≠ forall sets {forall}")
+            errs.append(f"Free set dimensions {lhs_free} ≠ `for all` set dimensions {forall}")
     elif lc and not rc:
         if sorted(rhs_free) != sorted(forall):
-            errs.append(f"Constant LHS: RHS sets {rhs_free} must match forall sets {forall}")
+            errs.append(f"Constant LHS: RHS set dimensions {rhs_free} must match `for all` set dimensions {forall}")
     elif not lc and rc:
         if sorted(lhs_free) != sorted(forall):
-            errs.append(f"Constant RHS: LHS sets {lhs_free} must match forall sets {forall}")
+            errs.append(f"Constant RHS: LHS set dimensions {lhs_free} must match `for all` set dimensions {forall}")
     elif lc and rc and forall:
-        errs.append(f"Both sides are constant, but forall sets were defined: {forall}")
+        errs.append(f"Both sides are constant, but `for all` set dimensions were defined: {forall}")
     return errs
 
-def _term_has_decision(t: dict) -> bool:
+def _term_has_variable(t: dict) -> bool:
     return any(
-        f.get("type") == "object" and f.get("kind") == "decision"
+        f.get("type") == "object" and f.get("kind") == "variable"
         for f in t.get("factors", [])
     )
 
 def _term_is_parameter_only(t: dict) -> bool:
-    """True when the complete term contains no decision symbol."""
-    return not _term_has_decision(t)
+    """True when the complete term contains no decision variable."""
+    return not _term_has_variable(t)
 
 def validate_linearity(spec: dict) -> list[str]:
     errs = []
@@ -743,13 +742,13 @@ def validate_linearity(spec: dict) -> list[str]:
             factors = t.get("factors", [])
             ops = _factor_ops(t)
 
-            decision_count = sum(
+            nv = sum(
                 1 for f in factors
-                if f.get("type") == "object" and f.get("kind") == "decision"
+                if f.get("type") == "object" and f.get("kind") == "variable"
             )
-            if decision_count > 1:
+            if nv > 1:
                 errs.append(
-                    f"{ctx} term {i}: {decision_count} decision symbols occur in the same factor chain "
+                    f"{ctx} term {i}: {nv} decision variables occur in the same factor chain "
                     "→ nonlinear expression."
                 )
 
@@ -757,9 +756,9 @@ def validate_linearity(spec: dict) -> list[str]:
                 if op != "/":
                     continue
 
-                if factor.get("type") == "object" and factor.get("kind") == "decision":
+                if factor.get("type") == "object" and factor.get("kind") == "variable":
                     errs.append(
-                        f"{ctx} term {i}: factor {pos} is a decision symbol in the denominator "
+                        f"{ctx} term {i}: factor {pos} is a decision variable in the denominator "
                         "→ nonlinear expression."
                     )
 
@@ -780,37 +779,37 @@ def validate_linearity(spec: dict) -> list[str]:
     def chk_connectors(terms, ctx):
         """
         Term-level × or ÷ is allowed only when it preserves linearity:
-        - multiplying a decision-containing accumulated expression by a parameter-only term is valid;
-        - multiplying two decision-containing expressions is nonlinear;
-        - division by a decision-containing term is nonlinear.
+        - multiplying a variable-containing accumulated expression by a parameter-only term is valid;
+        - multiplying two variable-containing expressions is nonlinear;
+        - division by a variable-containing term is nonlinear.
         """
         if not terms:
             return
 
-        acc_has_decision = _term_has_decision(terms[0])
+        acc_has_var = _term_has_variable(terms[0])
 
         for pos, t in enumerate(terms[1:], start=1):
             op = _term_connector(t, pos)
-            rhs_has_decision = _term_has_decision(t)
+            rhs_has_var = _term_has_variable(t)
 
             if op == "*":
-                if acc_has_decision and rhs_has_decision:
+                if acc_has_var and rhs_has_var:
                     errs.append(
                         f"{ctx} term {pos+1}: multiplying two expressions that contain decision "
-                        "decision symbols is nonlinear."
+                        "variables is nonlinear."
                     )
-                acc_has_decision = acc_has_decision or rhs_has_decision
+                acc_has_var = acc_has_var or rhs_has_var
 
             elif op == "/":
-                if rhs_has_decision:
+                if rhs_has_var:
                     errs.append(
                         f"{ctx} term {pos+1}: division by an expression containing a decision "
-                        "decision symbol is nonlinear."
+                        "variable is nonlinear."
                     )
-                # If denominator is parameter-only, decision status of the accumulated expression is unchanged.
+                # If denominator is parameter-only, variable status of accumulator is unchanged.
 
             else:
-                acc_has_decision = acc_has_decision or rhs_has_decision
+                acc_has_var = acc_has_var or rhs_has_var
 
     def chk(terms, ctx):
         chk_internal(terms, ctx)
@@ -851,11 +850,11 @@ def solver_factory_from_label(label: str):
 def _get_val(model, f: dict, env: dict):
     if f["type"] == "constant":
         return float(f["value"])
-    comp = getattr(model, f"{'par' if f['kind'] == 'parameter' else 'decision'}_{f['name']}")
-    sets_used = f["sets"]
-    if not sets_used:
+    comp = getattr(model, f"{'par' if f['kind'] == 'parameter' else 'var'}_{f['name']}")
+    component_sets = f["sets"]
+    if not component_sets:
         return comp
-    key = tuple(env[i] for i in sets_used)
+    key = tuple(env[i] for i in component_sets)
     return comp[key[0]] if len(key) == 1 else comp[key]
 
 def _eval_factor_chain(model, t: dict, env: dict):
@@ -882,9 +881,9 @@ def _eval_term_body(model, t: dict, env: dict):
             return _eval_factor_chain(model, t, local_env)
 
         sum_spec = sums[pos]
-        set_name = sum_spec["set"]
+        idx = sum_spec["index"]
         values = _sum_values(sum_spec, local_env, set_specs)
-        return sum(recurse(pos + 1, {**local_env, set_name: v}) for v in values)
+        return sum(recurse(pos + 1, {**local_env, idx: v}) for v in values)
 
     return recurse(0, dict(env))
 
@@ -923,25 +922,25 @@ def build_pyomo_model(spec: dict):
         setattr(m, f"set_{n}", pyo.Set(initialize=s["elements"], ordered=True))
 
     for pn, ps in spec["parameters"].items():
-        sets_used, vals = ps["sets"], ps["values"]
-        if not sets_used:
+        component_sets, vals = ps["sets"], ps["values"]
+        if not component_sets:
             setattr(m, f"par_{pn}", pyo.Param(initialize=float(vals["__scalar__"])))
         else:
-            sets = [getattr(m, f"set_{i}") for i in sets_used]
+            sets = [getattr(m, f"set_{i}") for i in component_sets]
             init = {}
-            for c in combos(sets_used, set_specs):
+            for c in combos(component_sets, set_specs):
                 k = c[0] if len(c) == 1 else c
                 init[k] = float(vals.get(str(c), 0.0))
             setattr(m, f"par_{pn}", pyo.Param(*sets, initialize=init))
 
-    for decision_name, decision_record in spec["decisions"].items():
-        sets_used = decision_record["sets"]
-        dom = _DOMAINS[decision_record["domain"]]
-        if not sets_used:
-            setattr(m, f"decision_{decision_name}", pyo.Var(domain=dom))
+    for vn, vs in spec["variables"].items():
+        component_sets = vs["sets"]
+        dom = _DOMAINS[vs["domain"]]
+        if not component_sets:
+            setattr(m, f"var_{vn}", pyo.Var(domain=dom))
         else:
-            sets = [getattr(m, f"set_{i}") for i in sets_used]
-            setattr(m, f"decision_{decision_name}", pyo.Var(*sets, domain=dom))
+            sets = [getattr(m, f"set_{i}") for i in component_sets]
+            setattr(m, f"var_{vn}", pyo.Var(*sets, domain=dom))
 
     obj = spec["objective"]
     obj_expr = _build_expr(m, obj["terms"], {})
@@ -965,23 +964,23 @@ def build_pyomo_model(spec: dict):
 
     return m
 
-def decision_solution_df(model, decision_name: str, decision_spec: dict, set_specs: dict) -> pd.DataFrame:
-    comp = getattr(model, f"decision_{decision_name}")
-    sets_used = decision_spec["sets"]
-    if not sets_used:
-        return pd.DataFrame({"decision_symbol": [decision_name], "value": [pyo.value(comp)]})
+def var_solution_df(model, vname: str, vspec: dict, set_specs: dict) -> pd.DataFrame:
+    comp = getattr(model, f"var_{vname}")
+    component_sets = vspec["sets"]
+    if not component_sets:
+        return pd.DataFrame({"variable": [vname], "value": [pyo.value(comp)]})
     rows = []
-    for c in combos(sets_used, set_specs):
-        row = {set_name: c[i] for i, set_name in enumerate(sets_used)}
+    for c in combos(component_sets, set_specs):
+        row = {idx: c[i] for i, idx in enumerate(component_sets)}
         row["value"] = pyo.value(comp[c[0]] if len(c) == 1 else comp[c])
         rows.append(row)
     return pd.DataFrame(rows)
 
-def all_decisions_df(model, spec: dict) -> pd.DataFrame:
+def all_vars_df(model, spec: dict) -> pd.DataFrame:
     dfs = []
-    for decision_name, decision_record in spec["decisions"].items():
-        df = decision_solution_df(model, decision_name, decision_record, spec["sets"])
-        df.insert(0, "decision_name", decision_name)
+    for vn, vs in spec["variables"].items():
+        df = var_solution_df(model, vn, vs, spec["sets"])
+        df.insert(0, "variable_name", vn)
         dfs.append(df)
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
@@ -991,12 +990,12 @@ def count_expanded(spec: dict, key: str) -> int:
     items = spec.get(key, {})
     collection = items.values() if isinstance(items, dict) else items
     for item in collection:
-        sets_used = item.get("sets", item.get("forall", []))
-        if not sets_used:
+        component_sets = item.get("sets", item.get("forall", []))
+        if not component_sets:
             total += 1
-        elif all(i in set_specs for i in sets_used):
+        elif all(i in set_specs for i in component_sets):
             n = 1
-            for i in sets_used:
+            for i in component_sets:
                 n *= set_specs[i]["size"]
             total += n
     return total
@@ -1028,7 +1027,7 @@ def _rand_controls(key_prefix: str) -> tuple[float, float, bool, int]:
     seed = int(c4.number_input("Seed", value=123, step=1, key=f"{key_prefix}_seed", help="Use the same seed to reproduce the same random values."))
     return lo, hi, integer, seed
 
-def _objective_term_position_from_key(t_key: str) -> int | None:
+def _objective_term_index_from_key(t_key: str) -> int | None:
     """
     Extract the objective-term position from keys such as:
       obj_t0
@@ -1049,18 +1048,18 @@ def _keep_objective_term_open_kwargs(t_key: str) -> dict:
     When a widget changes, Streamlit reruns the script; this callback
     records which expander must be reopened.
     """
-    term_position = _objective_term_position_from_key(t_key)
-    if term_position is None:
+    term_idx = _objective_term_index_from_key(t_key)
+    if term_idx is None:
         return {}
     return {
         "on_change": _open_objective_term,
-        "args": (term_position,),
+        "args": (term_idx,),
     }
 
 
 def build_factor_ui(
     t_key: str,
-    factor_position: int,
+    f_idx: int,
     old_factor: dict | None,
     catalog: list[dict],
     label_map: dict,
@@ -1069,13 +1068,13 @@ def build_factor_ui(
     old_factor = old_factor or {}
 
     ftype = st.selectbox(
-        f"Factor type {factor_position+1}",
+        f"Factor type {f_idx+1}",
         ["object", "constant"],
         index=0 if old_factor.get("type", default_type) == "object" else 1,
-        format_func=lambda x: "Parameter / Decision Symbol" if x == "object" else "Constant",
-        key=f"{t_key}_ftype_{factor_position}",
+        format_func=lambda x: "Parameter / Variable" if x == "object" else "Constant",
+        key=f"{t_key}_ftype_{f_idx}",
         help=(
-            "Choose a parameter, decision symbol, or numeric constant. "
+            "Choose a parameter/variable or a numeric constant. "
             "Multiplication and division are selected between consecutive factors."
         ),
         **_keep_objective_term_open_kwargs(t_key),
@@ -1084,7 +1083,7 @@ def build_factor_ui(
     if ftype == "object":
         labels = [o["label"] for o in catalog]
         if not labels:
-            st.error("No parameters or decision symbols are available.")
+            st.error("No parameters or variables are available.")
             return None
 
         default_lbl = labels[0]
@@ -1092,11 +1091,11 @@ def build_factor_ui(
             default_lbl = old_factor["label"]
 
         chosen = st.selectbox(
-            f"Object {factor_position+1}",
+            f"Object {f_idx+1}",
             labels,
             index=labels.index(default_lbl),
-            key=f"{t_key}_fobj_{factor_position}",
-            help="Select the parameter or decision symbol used in this factor.",
+            key=f"{t_key}_fobj_{f_idx}",
+            help="Select the parameter or decision variable used in this factor.",
             **_keep_objective_term_open_kwargs(t_key),
         )
         item = label_map[chosen]
@@ -1115,9 +1114,9 @@ def build_factor_ui(
         else 0.0
     )
     val = st.number_input(
-        f"Constant {factor_position+1}",
+        f"Constant {f_idx+1}",
         value=dval,
-        key=f"{t_key}_fconst_{factor_position}",
+        key=f"{t_key}_fconst_{f_idx}",
         help="Enter the numeric value used in this factor.",
         **_keep_objective_term_open_kwargs(t_key),
     )
@@ -1126,7 +1125,7 @@ def build_factor_ui(
 
 def build_term_ui(
     t_key: str,
-    term_position: int,
+    t_idx: int,
     old_term: dict | None,
     catalog: list[dict],
     label_map: dict,
@@ -1139,7 +1138,7 @@ def build_term_ui(
 
     c1, c2, c3 = st.columns([1, 2, 2])
 
-    if term_position == 0:
+    if t_idx == 0:
         connector_options = ["+", "-"]
         old_connector = old.get("connector", old.get("sign", "+"))
         if old_connector not in connector_options:
@@ -1158,7 +1157,7 @@ def build_term_ui(
         if old_connector not in connector_options:
             old_connector = "+"
         connector = c1.selectbox(
-            f"Connector {term_position+1}",
+            f"Connector {t_idx+1}",
             connector_options,
             index=connector_options.index(old_connector),
             format_func=lambda x: {
@@ -1175,7 +1174,7 @@ def build_term_ui(
             **_keep_objective_term_open_kwargs(t_key),
         )
     n_factors = int(c2.number_input(
-        f"Factors {term_position+1}",
+        f"Factors {t_idx+1}",
         min_value=1,
         max_value=6,
         value=max(1, len(old.get("factors", [])) or 2),
@@ -1185,7 +1184,7 @@ def build_term_ui(
         **_keep_objective_term_open_kwargs(t_key),
     ))
     n_sums = int(c3.number_input(
-        f"Summations {term_position+1}",
+        f"Summations {t_idx+1}",
         min_value=0,
         max_value=max(0, len(set_names)),
         value=min(len(old_sums), len(set_names)),
@@ -1217,7 +1216,7 @@ def build_term_ui(
                     key=f"{t_key}_fop_{fi-1}",
                     help=(
                         "Choose how this factor is combined with the previous factor. "
-                        "Division by a decision symbol is not allowed because the model would no longer be linear."
+                        "Division by a decision variable is not allowed because the model would no longer be linear."
                     ),
                     **_keep_objective_term_open_kwargs(t_key),
                 )
@@ -1238,54 +1237,54 @@ def build_term_ui(
     if n_sums:
         st.markdown("##### Summation bounds")
         st.info(
-            "**How sets work**\n\n"
-            "- `i`, `j`, etc. identify positions inside the sets used by parameters and decision symbols.\n"
-            "- To sum over the complete set `i`, use **Lower = `1`** and **Upper = `N_i`**.\n"
-            "- `N_i` means the total size of set `i`.\n"
+            "**How summation indexes work**\n\n"
+            "- `i`, `j`, etc. are summation indexes associated with the model sets used by parameters and variables.\n"
+            "- To sum over the complete set associated with `i`, use **Lower = `1`** and **Upper = `N_i`**.\n"
+            "- `N_i` means the total size of the set associated with `i`.\n"
             "- Do **not** use `i` as the upper bound of the same `i` summation; that would be circular.\n"
-            "- A bound may depend on another free or outer set, e.g. `i = j+2, ..., N_i`.\n"
+            "- A bound may depend on another free or outer summation index, e.g. `i = j+2, ..., N_i`.\n"
             "- Nested summations are evaluated from top to bottom: Summation 1 is outer, Summation 2 is inner."
         )
 
-    used_sum_sets = []
+    used_sum_indexes = []
     for si in range(n_sums):
         old_sum = old_sums[si] if si < len(old_sums) else {}
-        default_set = (
-            old_sum.get("set")
-            if old_sum.get("set") in set_names
+        default_sum_index = (
+            old_sum.get("index")
+            if old_sum.get("index") in set_names
             else (set_names[si] if si < len(set_names) else set_names[0])
         )
 
         with st.container(border=True):
             st.markdown(f"**Summation {si+1}**")
             a, b, c = st.columns([1.2, 1.8, 1.8])
-            set_name = a.selectbox(
-                f"Sum set {si+1}",
+            idx = a.selectbox(
+                f"Sum index {si+1}",
                 set_names,
-                index=set_names.index(default_set),
-                key=f"{t_key}_sumset_{si}",
+                index=set_names.index(default_sum_index),
+                key=f"{t_key}_sum_index_{si}",
                 help=(
-                    "Set iterated by this summation. "
+                    "Index iterated by this summation. "
                     "Summation 1 is the outermost summation."
                 ),
                 **_keep_objective_term_open_kwargs(t_key),
             )
 
             default_lower = str(old_sum.get("lower", "1"))
-            default_upper = str(old_sum.get("upper", f"N_{set_name}"))
+            default_upper = str(old_sum.get("upper", f"N_{idx}"))
 
-            # If an older UI stored the same set symbol as the upper bound,
+            # If an older UI stored the own index as the upper bound,
             # show the mathematically meaningful full-range default instead.
-            if default_upper == set_name:
-                default_upper = f"N_{set_name}"
+            if default_upper == idx:
+                default_upper = f"N_{idx}"
 
             lower = b.text_input(
                 f"Lower bound {si+1}",
                 value=default_lower,
                 key=f"{t_key}_sumlo_{si}",
                 help=(
-                    "Inclusive lower set position. Examples: `1`, `j+2`, `2*j+1`. "
-                    "It may depend on a free or outer set."
+                    "Inclusive lower index position. Examples: `1`, `j+2`, `2*j+1`. "
+                    "It may depend on a free or outer index."
                 ),
                 **_keep_objective_term_open_kwargs(t_key),
             ).strip()
@@ -1295,19 +1294,19 @@ def build_term_ui(
                 value=default_upper,
                 key=f"{t_key}_sumhi_{si}",
                 help=(
-                    f"Inclusive upper position. Use `N_{set_name}` to traverse the complete `{set_name}` set."
+                    f"Inclusive upper position. Use `N_{idx}` to traverse the complete `{idx}` index."
                 ),
                 **_keep_objective_term_open_kwargs(t_key),
             ).strip()
 
-            if set_name in used_sum_sets:
-                st.error(f"Set `{set_name}` is already used by another summation in this term.")
-            used_sum_sets.append(set_name)
+            if idx in used_sum_indexes:
+                st.error(f"Set `{idx}` is already used by another summation in this term.")
+            used_sum_indexes.append(idx)
 
             sums.append({
-                "set": set_name,
+                "index": idx,
                 "lower": lower or "1",
-                "upper": upper or f"N_{set_name}",
+                "upper": upper or f"N_{idx}",
             })
 
     term = {
@@ -1328,9 +1327,9 @@ def object_catalog(spec: dict) -> tuple[list[dict], dict]:
     for pn, ps in spec["parameters"].items():
         lbl = sig(pn, ps["sets"])
         items.append({"kind": "parameter", "name": pn, "sets": ps["sets"], "label": lbl})
-    for decision_name, decision_record in spec["decisions"].items():
-        lbl = sig(decision_name, decision_record["sets"])
-        items.append({"kind": "decision", "name": decision_name, "sets": decision_record["sets"], "label": lbl})
+    for vn, vs in spec["variables"].items():
+        lbl = sig(vn, vs["sets"])
+        items.append({"kind": "variable", "name": vn, "sets": vs["sets"], "label": lbl})
     return items, {o["label"]: o for o in items}
 
 def _open_family(r: int):
@@ -1346,7 +1345,7 @@ def _open_objective_term(t: int):
 # SIDEBAR
 # ============================================================
 n_sets = len(spec["sets"])
-n_decisions = count_expanded(spec, "decisions")
+n_var = count_expanded(spec, "variables")
 n_con = count_expanded(spec, "constraints")
 
 st.sidebar.markdown("""
@@ -1367,36 +1366,36 @@ def _sb_kpi(label, value):
 
 c1, c2 = st.sidebar.columns(2)
 c1.markdown(_sb_kpi("Sets", n_sets), unsafe_allow_html=True)
-c2.markdown(_sb_kpi("Decision Symbols", n_decisions), unsafe_allow_html=True)
+c2.markdown(_sb_kpi("Variables", n_var), unsafe_allow_html=True)
 st.sidebar.markdown(_sb_kpi("Defined constraints", n_con), unsafe_allow_html=True)
 
 # ============================================================
 # MAIN
 # ============================================================
-st.title("MILP General")
+st.title("General MILP")
 st.caption("Application for building and solving single-objective mixed-integer linear programming models.")
 
 # ============================================================
 # SECTION 1: DATA INPUT
 # ============================================================
 if section == "Data Input":
-    hero("1. Data Input", "Define the model sets, parameters, and decision symbols.")
+    hero("1. Data Input", "Define the model sets, parameters, and decision variables.")
 
     c1, c2, c3 = st.columns(3)
     with c1: kpi_card("Sets", len(spec["sets"]))
     with c2: kpi_card("Parameters", len(spec["parameters"]))
-    with c3: kpi_card("Decision Symbols", len(spec["decisions"]))
+    with c3: kpi_card("Variables", len(spec["variables"]))
 
     st.markdown("<br>", unsafe_allow_html=True)
-    tab_sets, tab_par, tab_decision = st.tabs(["Sets", "Parameters", "Decision Symbols"])
+    tab_sets, tab_par, tab_var = st.tabs(["Sets", "Parameters", "Variables"])
 
     # -- SETS --
     with tab_sets:
-        section_box("Set Configuration", "Define the finite sets used by parameters, decision symbols, and constraints.", "Create each set with a symbolic name and a finite size. Elements are internally ordered from position 1 to N.")
+        section_box("Set Configuration", "Define the base sets used by parameters, variables, and constraints.", "Create each set with a symbolic name and a finite size. Elements are internally ordered from position 1 to N.")
         n = st.number_input("Number of sets", 1, 10, max(1, len(spec["sets"]) or 3), step=1, key="num_sets")
         existing_names = list(spec["sets"].keys())
 
-        set_specs_new, errors = {}, []
+        new_set_specs, errors = {}, []
         used = set()
         for r in range(int(n)):
             default_name = existing_names[r] if r < len(existing_names) else f"set_{r+1}"
@@ -1410,22 +1409,22 @@ if section == "Data Input":
                 errors.append(f"Set `{name}` is duplicated.")
             else:
                 used.add(name)
-                set_specs_new[name] = {"size": size, "elements": set_elements(size, name)}
+                new_set_specs[name] = {"size": size, "elements": set_elements(size, name)}
 
         for e in errors: st.error(e)
 
         if not errors:
-            spec["sets"] = set_specs_new
-            # Remove parameters and decision symbols whose sets no longer exist
-            valid = set(set_specs_new)
+            spec["sets"] = new_set_specs
+            # Remove parameters and variables whose sets no longer exist
+            valid = set(new_set_specs)
             spec["parameters"] = {k: v for k, v in spec["parameters"].items() if all(i in valid for i in v.get("sets", []))}
-            spec["decisions"] = {k: v for k, v in spec["decisions"].items() if all(i in valid for i in v.get("sets", []))}
+            spec["variables"] = {k: v for k, v in spec["variables"].items() if all(i in valid for i in v.get("sets", []))}
 
-            if set_specs_new:
+            if new_set_specs:
                 st.write("**Preview:**")
                 st.dataframe(pd.DataFrame([
                     {"Set": n, "Size": s["size"], "Elements": ", ".join(s["elements"])}
-                    for n, s in set_specs_new.items()
+                    for n, s in new_set_specs.items()
                 ]), use_container_width=True, hide_index=True)
 
     # -- PARAMETERS --
@@ -1494,7 +1493,7 @@ if section == "Data Input":
                         args=(p,)
                     ).strip()
                     parameter_sets = col2.multiselect(
-                        f"Sets for {pname}",
+                        f"Sets of {pname}",
                         set_options,
                         default=default_sets,
                         key=f"psets_{p}",
@@ -1631,40 +1630,40 @@ if section == "Data Input":
                             hide_index=True
                         )
 
-    # -- DECISION SYMBOLS --
-    with tab_decision:
-        section_box("Decision Symbol Configuration", "Define decision symbols, their sets, and their domains.", "Assign each decision symbol the sets that determine its dimensions, then choose its mathematical domain.")
+    # -- VARIABLES --
+    with tab_var:
+        section_box("Variable Configuration", "Define decision variables, their sets, and their domains.", "Assign each variable the sets that determine its dimensions, then choose its mathematical domain.")
         set_specs = spec["sets"]
 
         if not set_specs:
             st.info("Define valid sets first.")
         else:
-            cur = spec["decisions"]
-            n_decision_symbols = int(st.number_input("Number of decision symbols", 0, 30, max(1, len(cur)) if cur else 1, step=1, key="num_decisions"))
+            cur = spec["variables"]
+            n_v = int(st.number_input("Number of variables", 0, 30, max(1, len(cur)) if cur else 1, step=1, key="num_vars"))
             set_options = list(set_specs.keys())
             dom_opts = ["Binary", "NonNegativeReals", "NonNegativeIntegers"]
-            new_decisions = {}
+            new_vars = {}
 
-            for decision_position in range(n_decision_symbols):
-                st.markdown(f"#### Decision Symbol {decision_position+1}")
+            for v in range(n_v):
+                st.markdown(f"#### Variable {v+1}")
                 old_names = list(cur.keys())
-                old_name = old_names[decision_position] if decision_position < len(old_names) else f"x_{decision_position+1}"
+                old_name = old_names[v] if v < len(old_names) else f"x_{v+1}"
                 col1, col2, col3 = st.columns([2, 3, 2])
-                decision_name = col1.text_input(f"Name {v+1}", value=old_name, key=f"decision_name_{decision_position}").strip()
-                decision_sets = col2.multiselect(f"Sets for {decision_name}", set_options, default=cur.get(old_name, {}).get("sets", []), key=f"dsets_{decision_position}")
+                vname = col1.text_input(f"Name {v+1}", value=old_name, key=f"vname_{v}").strip()
+                variable_sets = col2.multiselect(f"Sets of {vname}", set_options, default=cur.get(old_name, {}).get("sets", []), key=f"vsets_{v}")
                 old_dom = cur.get(old_name, {}).get("domain", "NonNegativeReals")
-                decision_domain = col3.selectbox(f"Domain of {decision_name}", dom_opts, index=dom_opts.index(old_dom if old_dom in dom_opts else "NonNegativeReals"), key=f"decision_domain_{decision_position}")
+                v_dom = col3.selectbox(f"Domain of {vname}", dom_opts, index=dom_opts.index(old_dom if old_dom in dom_opts else "NonNegativeReals"), key=f"vdom_{v}")
 
-                if not valid_sym(decision_name): st.error(f"`{decision_name}` is not valid."); continue
-                if decision_name in new_decisions: st.error(f"`{decision_name}` is duplicated."); continue
-                new_decisions[decision_name] = {"sets": decision_sets, "domain": decision_domain}
+                if not valid_sym(vname): st.error(f"`{vname}` is not valid."); continue
+                if vname in new_vars: st.error(f"`{vname}` is duplicated."); continue
+                new_vars[vname] = {"sets": variable_sets, "domain": v_dom}
 
-            spec["decisions"] = new_decisions
-            if new_decisions:
+            spec["variables"] = new_vars
+            if new_vars:
                 st.write("**Summary:**")
                 st.dataframe(pd.DataFrame([
-                    {"Decision Symbol": sig(name, record["sets"]), "Domain": DOMAIN_LABELS.get(record["domain"], record["domain"]), "Components": total_elems(record["sets"], set_specs)}
-                    for name, record in new_decisions.items()
+                    {"Variable": sig(n, v["sets"]), "Domain": DOMAIN_LABELS.get(v["domain"], v["domain"]), "Components": total_elems(v["sets"], set_specs)}
+                    for n, v in new_vars.items()
                 ]), use_container_width=True, hide_index=True)
 
 # ============================================================
@@ -1676,8 +1675,8 @@ elif section == "Model Definition":
 
     if not set_specs:
         st.warning("Define at least one set first.")
-    elif not spec["decisions"]:
-        st.warning("Define at least one decision symbol first.")
+    elif not spec["variables"]:
+        st.warning("Define at least one variable first.")
     else:
         catalog, label_map = object_catalog(spec)
         set_names = list(set_specs.keys())
@@ -1687,8 +1686,8 @@ elif section == "Model Definition":
         with tab_obj:
             section_box(
                 "Objective Function",
-                "Combine parameters, decision symbols, constants, and summations to define the single objective.",
-                "Every free set reference in the objective must be eliminated by a summation. Use N_i for the full upper bound of set i; dynamic bounds may depend on another free or outer set, such as j+2."
+                "Combine parameters, variables, constants, and summations to define the single objective.",
+                "Every free set dimension in the objective must be eliminated by a summation. Use N_i for the full upper bound associated with set i; dynamic bounds may depend on another free or outer summation index, such as j+2."
             )
             cur_obj = spec.get("objective") or {}
             sense_opts = ["minimize", "maximize"]
@@ -1743,8 +1742,8 @@ elif section == "Model Definition":
         with tab_rest:
             section_box(
                 "Constraint Families",
-                "Define set-based constraint families by building the left-hand side, operator, and right-hand side.",
-                "Use For all for the free sets of the family. For a complete sum over i use 1 to N_i. A dynamic bound may depend on another free or outer set, for example i=j+2,...,N_i."
+                "Define constraint families over the model sets by building the left-hand side, operator, and right-hand side.",
+                "Use For all for the free set dimensions of the family. For a complete sum over i use 1 to N_i. A dynamic bound may depend on another free or outer summation index, for example i=j+2,...,N_i."
             )
             old_fams = spec.get("constraints", [])
             n_fams = int(st.number_input("Constraint families", 0, 30, len(old_fams), step=1, key="n_fams", help="Number of algebraic constraint families in the model."))
@@ -1773,7 +1772,7 @@ elif section == "Model Definition":
                     st.markdown(f"### Family {r+1}")
                     cf1, cf2, cf3 = st.columns(3)
                     fname = cf1.text_input(f"Family name {r+1}", value=default_name, key=f"cfname_{r}", on_change=_open_family, args=(r,), help="Use a short symbolic name such as Capacity or Balance.").strip()
-                    forall = cf2.multiselect(f"For all sets in {fname}", set_names, default=(old_fam or {}).get("forall", []), key=f"cfforall_{r}", on_change=_open_family, args=(r,), help="Select the free sets that define this constraint family.")
+                    forall = cf2.multiselect(f"For all set dimensions in {fname}", set_names, default=(old_fam or {}).get("forall", []), key=f"cfforall_{r}", on_change=_open_family, args=(r,), help="Select the free set dimensions that define this constraint family.")
                     sense_f = cf3.selectbox(f"Operator for {fname}", ["<=", ">=", "="], index=["<=", ">=", "="].index((old_fam or {}).get("sense", "<=")), key=f"cfsense_{r}", on_change=_open_family, args=(r,), help="Choose the relational operator between the left-hand and right-hand sides.")
 
                     if not valid_sym(fname): st.error(f"`{fname}` is not valid."); continue
@@ -1865,7 +1864,7 @@ elif section == "Model Definition":
 # SECTION 3: MODEL OUTPUTS
 # ============================================================
 elif section == "Model Outputs":
-    hero("3. Model Outputs", "Solve the model and inspect the optimal objective value and decision symbols.")
+    hero("3. Model Outputs", "Solve the model and inspect the optimal objective value and decision variables.")
 
     # Validate
     errs = []
@@ -1876,20 +1875,20 @@ elif section == "Model Outputs":
     for fam in spec.get("constraints", []):
         errs.extend(validate_family(fam, list(spec["sets"].keys())))
     errs.extend(validate_linearity(spec))
-    if not spec["decisions"]: errs.append("No decision symbols defined.")
+    if not spec["variables"]: errs.append("No variables defined.")
     if not spec["sets"]: errs.append("No sets defined.")
 
     for e in errs: st.error(e)
     if errs: st.stop()
     st.success("Model specification is valid.")
 
-    tab_solve, tab_decision_values = st.tabs(["Solve", "Decision Values"])
+    tab_solve, tab_vars = st.tabs(["Solve", "Solution Variables"])
 
     with tab_solve:
         section_box(
             "Solve Model",
             "Validate the model, select an available solver, and compute the solution.",
-            "The application currently supports linear models. Products containing more than one decision symbol are rejected as nonlinear."
+            "The application currently supports linear models. Products containing more than one decision variable are rejected as nonlinear."
         )
         st.subheader("Solve model")
         solver_label = st.selectbox(
@@ -1934,33 +1933,33 @@ elif section == "Model Outputs":
             obj_val = results.get("objective_value")
             kpi_card("Optimal value", "Not available" if obj_val is None else f"{obj_val:,.6f}")
 
-    with tab_decision_values:
+    with tab_vars:
         section_box(
-            "Decision Values",
-            "Inspect the value of each decision symbol and export the results.",
-            "Select one decision symbol for its full solution table or use Nonzero Decisions to focus only on active decisions."
+            "Solution Variables",
+            "Inspect the value of each decision variable and export the results.",
+            "Select one variable for its full solution table or use Nonzero Variables to focus only on active decisions."
         )
         results = spec.get("results")
         model = st.session_state.get("solved_model_object")
         if not results or not model:
             st.info("Solve the model first.")
         else:
-            subtab_decision, subtab_nz = st.tabs(["Select Decision", "Nonzero Decisions"])
+            subtab_var, subtab_nz = st.tabs(["Select Variable", "Nonzero Variables"])
 
-            with subtab_decision:
-                st.subheader("Solution by decision")
-                decision_names = list(spec["decisions"].keys())
-                sel = st.selectbox("Decision Symbol", decision_names)
-                df = decision_solution_df(model, sel, spec["decisions"][sel], spec["sets"])
+            with subtab_var:
+                st.subheader("Solution by variable")
+                vnames = list(spec["variables"].keys())
+                sel = st.selectbox("Variable", vnames)
+                df = var_solution_df(model, sel, spec["variables"][sel], spec["sets"])
                 st.dataframe(df, use_container_width=True, hide_index=True)
                 st.download_button("Download CSV", data=df.to_csv(index=False).encode(), file_name=f"{sel}_solution.csv", mime="text/csv")
 
             with subtab_nz:
-                st.subheader("Nonzero decisions")
-                full_df = all_decisions_df(model, spec)
+                st.subheader("Nonzero variables")
+                full_df = all_vars_df(model, spec)
                 nz_df = full_df[full_df["value"].abs() > 1e-9].reset_index(drop=True) if not full_df.empty else full_df
                 if nz_df.empty:
-                    st.info("There are no nonzero decisions.")
+                    st.info("There are no nonzero variables.")
                 else:
                     st.dataframe(nz_df, use_container_width=True, hide_index=True)
-                st.download_button("Download CSV", data=nz_df.to_csv(index=False).encode(), file_name="nonzero_decisions.csv", mime="text/csv")
+                st.download_button("Download CSV", data=nz_df.to_csv(index=False).encode(), file_name="nonzero_variables.csv", mime="text/csv")
